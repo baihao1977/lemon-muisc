@@ -41,7 +41,7 @@ import {
   detectPreviewClip,
   formatPreviewClipMessage,
 } from '../utils/audioDuration.js'
-import { platformLabel, PLATFORM_LABELS, platformLabelEpoch } from '../utils/platforms.js'
+import { platformLabel, platformShortLabel, PLATFORM_LABELS, platformLabelEpoch } from '../utils/platforms.js'
 import { searchState } from './search.js'
 import { discoverState } from './discover.js'
 import { QUALITY_LABELS, QUALITY_ORDER, getQualityLabel } from '../utils/quality.js'
@@ -81,10 +81,10 @@ export const currentPlayPlatformLabel = computed(() => {
   if (!key) return ''
   if (key === 'local') return '本地'
   if (key === 'podcast') return '播客'
-  // 依赖 epoch / sources，MusicFree 的 mf* 能显示成「卍-网易云」等
+  // 依赖 epoch / sources；播放栏用短名（星海音乐源-汽水 → 汽水）
   void platformLabelEpoch.value
   const info = searchState.sources?.[key] || discoverState.sources?.[key] || {}
-  return platformLabel(key, info)
+  return platformShortLabel(key, info)
 })
 export const currentPlayQualityLabel = computed(() => {
   const q = String(currentPlayQuality.value || '').trim()
@@ -95,7 +95,7 @@ export const currentPlayQualityLabel = computed(() => {
   if (upper === 'FLAC24BIT') return 'FLAC Hi-Res'
   return upper
 })
-/** 试听区徽章：平台 · 音质 */
+/** 试听区徽章：短平台名 · 音质（如「汽水 · FLAC」） */
 export const currentPlaySourceMetaLabel = computed(() => {
   const plat = currentPlayPlatformLabel.value
   const qual = currentPlayQualityLabel.value

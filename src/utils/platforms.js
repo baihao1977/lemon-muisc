@@ -52,6 +52,29 @@ export function registerPlatformLabels(sourcesMap) {
   if (changed) platformLabelEpoch.value += 1
 }
 
+/** 播放栏等处用的短名：星海音乐源-汽水 → 汽水，卍-网易云 → 网易云 */
+const SHORT_PLATFORM_NAMES = [
+  '汽水', '网易云', '酷狗', '酷我', '咪咕', 'QQ音乐', 'B站', '喜马拉雅', 'YouTube',
+]
+
+export function shortenPlatformDisplayName(name) {
+  let s = String(name || '').trim()
+  if (!s) return ''
+  const branded = s.match(/^.+(?:音乐源|音源|插件)[-_—－\/](.+)$/)
+  if (branded?.[1]) s = branded[1].trim()
+  const stripped = s.replace(/^[卍★☆※◆◇●○]+[-_—－]?/, '').trim()
+  if (stripped) s = stripped
+  for (const hit of SHORT_PLATFORM_NAMES) {
+    if (s === hit || s.endsWith(hit)) return hit
+  }
+  if (/[-_—－]/.test(s)) {
+    const parts = s.split(/[-_—－]/).map((p) => p.trim()).filter(Boolean)
+    const last = parts[parts.length - 1]
+    if (last && last.length <= 10) return last
+  }
+  return s
+}
+
 /** 优先标准中文名；音源脚本 name 为 key 或空时回退 */
 export function platformLabel(key, info = {}) {
   const k = String(key || '').trim()
@@ -61,6 +84,11 @@ export function platformLabel(key, info = {}) {
   if (PLATFORM_LABELS[k]) return PLATFORM_LABELS[k]
   if (runtimePlatformLabels[k]) return runtimePlatformLabels[k]
   return k
+}
+
+/** 播放栏徽章用短平台名（不含音质） */
+export function platformShortLabel(key, info = {}) {
+  return shortenPlatformDisplayName(platformLabel(key, info))
 }
 
 export function orderPlatformKeys(keys, hintOrder = []) {

@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 import needle from 'needle'
 import { scoreMatch } from './utils/filenameParse.js'
+import { extractKgShareUrl, kgShareQueryFromInput } from './utils/kugouShare.js'
 
 const req = (method, url, body, headers = {}) => {
   return needle(method, url, body, {
@@ -2286,23 +2287,6 @@ function kgExtractIdsFromShareHtml(html) {
   }
 }
 
-function kgShareQueryFromInput(raw) {
-  const input = String(raw || '').trim()
-  try {
-    if (/^https?:\/\//i.test(input)) {
-      const u = new URL(input)
-      const q = u.searchParams
-      return {
-        srcCid: q.get('src_cid') || q.get('srcCid') || '',
-        uid: q.get('uid') || q.get('u') || '',
-        iszlist: q.get('iszlist') || '',
-        chl: q.get('chl') || '',
-      }
-    }
-  } catch {}
-  return { srcCid: '', uid: '', iszlist: '', chl: '' }
-}
-
 async function kgPlaylistFromShareEmbed(extracted, options = {}) {
   const listinfo = extracted?.listinfo && typeof extracted.listinfo === 'object' ? extracted.listinfo : {}
   const songs = Array.isArray(extracted?.songs) ? extracted.songs : []
@@ -2349,6 +2333,13 @@ async function kgResolveGcid(encodeGcid, shareQuery = {}) {
   if (!/^gcid_[a-zA-Z0-9_]+$/i.test(gcid)) {
     throw new Error('无法解析酷狗 gcid 歌单')
   }
+  // Sharing pages may deliberately hide the collection ID (no_show_gid).
+  // Resolve the encoded ID directly instead of guessing the owner's list numbers.
+  try {
+    return { globalCollectionId: await kgDecodeGcid(gcid) }
+  } catch {
+    // Keep the H5 preview available when the decode service is unavailable.
+  }
   const qs = new URLSearchParams()
   const srcCid = String(shareQuery.srcCid || '').trim() || gcid.replace(/^gcid_/i, '')
   if (srcCid) qs.set('src_cid', srcCid)
@@ -2390,12 +2381,30 @@ function kgMd5Hex(text) {
   return crypto.createHash('md5').update(String(text), 'utf8').digest('hex')
 }
 
-function kgSignWebParams(params, salt = KG_WEB_SIGN_SALT) {
+function kgSignWebParams(params, salt = KG_WEB_SIGN_SALT, body = '') {
   const entries = Object.entries(params)
     .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
     .map(([k, v]) => [String(k), String(v)])
-    .sort(([a], [b]) => a.localeCompare(b))
-  return kgMd5Hex(salt + entries.map(([k, v]) => `${k}=${v}`).join('') + salt)
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+  return kgMd5Hex(salt + entries.map(([k, v]) => `${k}=${v}`).join('') + body + salt)
+}
+
+async function kgDecodeGcid(gcid) {
+  const params = {
+    dfid: '-', appid: '1005', mid: '0', clientver: '20109',
+    clienttime: String(Math.floor(Date.now() / 1000)), uuid: '-',
+  }
+  const body = JSON.stringify({ ret_info: 1, data: [{ id: gcid, id_type: 2 }] })
+  params.signature = kgSignWebParams(params, KG_WEB_SIGN_SALT, body)
+  const data = parseJSON(await req('post',
+    `https://t.kugou.com/v1/songlist/batch_decode?${new URLSearchParams(params)}`,
+    body, { ...KG_MOBILE_HTML_HEADERS, 'Content-Type': 'application/json' }))
+  const entry = data?.data?.list?.find(item => item.id === gcid)
+  const gid = String(entry?.global_collection_id || '')
+  if (data?.status !== 1 || !/^collection_\w+$/.test(gid)) {
+    throw new Error('无法解码酷狗歌单 ID')
+  }
+  return gid
 }
 
 async function kgFetchOtherListNofilt(globalCollectionId, { beginIdx = 0, pageSize = 300 } = {}) {
@@ -2429,59 +2438,15 @@ async function kgFetchOtherListNofilt(globalCollectionId, { beginIdx = 0, pageSi
     Referer: 'https://m.kugou.com/',
     mid: KG_WEB_MID,
   }))
-  if (!data || (data.status !== 1 && data.error_code !== 0)) {
+  if (!data || data.status !== 1 || (data.error_code != null && data.error_code !== 0)) {
     const err = data?.errmsg || data?.error || '酷狗歌单接口失败'
     throw new Error(String(err))
   }
   return data
 }
 
-/**
- * 自建歌单分享页常隐藏 collection_id（no_show_gid）。
- * 有 userid + 歌单名时，扫描 collection_3_{uid}_{listid}_0 匹配。
- */
-async function kgResolveCollectionIdByUser(userid, hint = {}) {
-  const uid = String(userid || '').trim()
-  if (!/^\d+$/.test(uid) || uid === '0') return ''
-  const wantName = cleanHtml(hint.name || '').trim()
-  const wantCount = parseInt(hint.count, 10) || 0
-  let best = null
-  // 多数用户自建歌单 listid 较小；先密后疏，命中即停
-  const maxListId = wantName ? 48 : 24
-  const concurrency = 10
-  for (let start = 1; start <= maxListId; start += concurrency) {
-    const ids = Array.from(
-      { length: Math.min(concurrency, maxListId - start + 1) },
-      (_, i) => start + i,
-    )
-    const rows = await Promise.all(ids.map(async (listId) => {
-      const gid = `collection_3_${uid}_${listId}_0`
-      try {
-        const data = await kgFetchOtherListNofilt(gid, { beginIdx: 0, pageSize: 1 })
-        const li = data.data?.list_info || data.data?.info || {}
-        const name = cleanHtml(li.name || li.specialname || li.list_name || '').trim()
-        const count = parseInt(data.data?.count ?? li.count, 10) || 0
-        return { gid, name, count }
-      } catch {
-        return null
-      }
-    }))
-    for (const row of rows) {
-      if (!row) continue
-      if (wantName && row.name && row.name === wantName) return row.gid
-      if (wantCount > 0 && row.count > 0) {
-        const diff = Math.abs(row.count - wantCount)
-        if (!best || diff < best.diff) best = { ...row, diff }
-      }
-    }
-  }
-  // 曲目数接近（分享页 count 可能略滞后）时采用
-  if (best && best.diff <= Math.max(20, Math.floor(wantCount * 0.08))) return best.gid
-  return ''
-}
-
 async function kgPlaylistFromGid(globalCollectionId, options = {}) {
-  const pageSize = 300
+  const pageSize = options.partial ? PLAYLIST_PARTIAL_LIMIT : 300
   const firstData = await kgFetchOtherListNofilt(globalCollectionId, { beginIdx: 0, pageSize })
   const li = firstData.data?.list_info || firstData.data?.info || {}
   const cover = String(li.pic || li.img || li.cover || li.create_user_pic || '')
@@ -2498,40 +2463,58 @@ async function kgPlaylistFromGid(globalCollectionId, options = {}) {
     data.data?.songs || data.data?.info?.songs || data.data?.lists || []
   ).map(mapKgSongItem)
 
+  const normalizeTracks = (tracks) => {
+    const seen = new Set()
+    return tracks.filter(s => {
+      if (!s.name || !(s.hash || s.albumAudioId)) return false
+      // The same audio can appear on distinct albums; retain those entries.
+      const key = s.albumAudioId ? `audio:${s.albumAudioId}` : `hash:${s.hash}:${s.albumId}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
   const firstBatch = mapPageSongs(firstData)
   const total = parseInt(firstData.data?.count || firstData.data?.total, 10) || firstBatch.length
   if (options.partial) {
-    const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(firstBatch, info.img || ''))
+    const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(normalizeTracks(firstBatch), info.img || ''))
     const infoFinal = finalizePlaylistInfo(info, list)
+    const hasMore = total > firstBatch.length
     return {
       list,
-      total: total || list.length,
+      total: hasMore ? total - (firstBatch.length - list.length) : list.length,
       source: 'kg',
       info: infoFinal,
-      hasMore: total > list.length,
+      hasMore,
       partial: true,
     }
   }
 
   const batches = [firstBatch]
+  const pageKeys = new Set([firstBatch.map(s => s.albumAudioId || s.hash || s.id).join(',')])
   let begin = firstBatch.length
   while (begin < total) {
     const data = await kgFetchOtherListNofilt(globalCollectionId, { beginIdx: begin, pageSize })
     const batch = mapPageSongs(data)
     if (!batch.length) break
+    const pageKey = batch.map(s => s.albumAudioId || s.hash || s.id).join(',')
+    if (pageKeys.has(pageKey)) break
+    pageKeys.add(pageKey)
     batches.push(batch)
     begin += batch.length
-    if (batch.length < pageSize) break
   }
 
   const flat = batches.flat()
-  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(flat, info.img || ''))
+  const list = await enrichKgSongsCoversByAlbum(clearMatchingTrackCovers(normalizeTracks(flat), info.img || ''))
   const infoFinal = finalizePlaylistInfo(info, list)
-  return { list, total: total || list.length, source: 'kg', info: infoFinal, hasMore: false, partial: false }
+  const hasMore = begin < total
+  const normalizedTotal = hasMore ? Math.max(list.length, total - (flat.length - list.length)) : list.length
+  return { list, total: normalizedTotal, source: 'kg', info: infoFinal, hasMore, partial: false, truncated: hasMore }
 }
 
 async function kgResolveShareInput(raw) {
-  const input = String(raw || '').trim()
+  const input = extractKgShareUrl(raw)
   if (!/^https?:\/\/t\d*\.kugou\.com\//i.test(input)) return input
   try {
     const resp = await needle('get', input, {
@@ -2564,25 +2547,6 @@ async function kgPlaylist(parsed, options = {}) {
     // 预览：分享页内嵌首页歌曲即可（避免扫 collection 过慢）
     if (options.partial && ids.songs?.length) {
       return kgPlaylistFromShareEmbed(ids, options)
-    }
-
-    // 自建歌单：分享页隐藏 gid，用 uid + 歌单名扫 collection_3_{uid}_{listid}_0
-    const uid = String(
-      shareQuery.uid
-      || ids.listinfo?.list_create_userid
-      || ids.listinfo?.userid
-      || '',
-    ).trim()
-    if (uid) {
-      try {
-        const gid = await kgResolveCollectionIdByUser(uid, {
-          name: ids.listinfo?.name,
-          count: ids.listinfo?.count || ids.songs?.length,
-        })
-        if (gid) return await kgPlaylistFromGid(gid, options)
-      } catch {
-        // 扫描失败则回退内嵌歌曲
-      }
     }
 
     if (ids.fromShareEmbed || ids.songs?.length) return kgPlaylistFromShareEmbed(ids, options)

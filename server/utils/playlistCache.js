@@ -23,6 +23,8 @@ export function getCachedPlaylist(key) {
 
 export function setCachedPlaylist(key, data, ttlMs = PLAYLIST_TTL_MS) {
   if (!key || !data) return
+  // A full request may fall back to an H5 preview; allow the next request to retry.
+  if (data.truncated || (data.hasMore && !data.partial)) return
   cache.set(key, { data, expiresAt: Date.now() + ttlMs })
   if (cache.size > MAX_ENTRIES) {
     const oldest = cache.keys().next().value

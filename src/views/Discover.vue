@@ -122,6 +122,11 @@
       </div>
     </div>
 
+    <div v-if="playlistIncomplete" class="playlist-incomplete card" role="status">
+      当前仅加载 {{ discoverState.results.length }} / {{ discoverState.total }} 首，剩余歌曲未能获取。
+      可点击「确认」重试，或使用酷狗完整歌单链接 / collection_ ID。
+    </div>
+
     <div class="results card" v-if="discoverState.viewMode === 'detail' && discoverState.results.length">
       <div class="results-toolbar">
         <span class="results-count">
@@ -430,6 +435,12 @@ const currentPlaceholder = computed(() =>
 
 const showPlaylistLoadBar = computed(() =>
   discoverState.viewMode === 'detail' && (discoverState.loading || discoverState.loadingMore))
+
+const playlistIncomplete = computed(() =>
+  discoverState.viewMode === 'detail'
+  && !discoverState.loading && !discoverState.loadingMore
+  && discoverState.results.length > 0
+  && discoverState.total > discoverState.results.length)
 
 const playlistLoadProgress = computed(() => {
   const total = discoverState.total || 0
@@ -1328,6 +1339,13 @@ function showToast(text, type = 'info') {
 .discover-page {
   width: 100%;
   max-width: none;
+}
+
+.playlist-incomplete {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  color: var(--text-secondary);
+  border: 1px solid var(--accent);
 }
 
 .pick-hint {

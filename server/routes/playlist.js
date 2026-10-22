@@ -1,5 +1,7 @@
 import { Router } from 'express'
-import { fetchPlaylist, fetchRecommendPlaylists } from '../musicSdk.js'
+import { AVAILABLE_SOURCES, fetchPlaylist, fetchRecommendPlaylists } from '../musicSdk.js'
+import { fetchPluginSheet } from '../sourceManager.js'
+import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import { getDisplaySources } from '../utils/displaySources.js'
 import { formatUserError } from '../utils/userError.js'
 import { createLimiter, withTimeout } from '../utils/asyncLimit.js'
@@ -26,6 +28,9 @@ playlistRouter.get('/recommend', async (req, res) => {
     const { source = 'kw', sort = 'new', page = 1, limit } = req.query
     if (!availableSources(req)[source]) {
       return res.status(400).json({ error: `不支持的平台: ${source}` })
+    }
+    if (!AVAILABLE_SOURCES[source]) {
+      return res.json({ ok: true, data: { list: [], allPage: 1, total: 0 } })
     }
     const pageNum = Math.max(1, Number(page) || 1)
     const limitNum = Math.min(60, Math.max(10, Number(limit) || 30))
@@ -60,8 +65,12 @@ playlistRouter.get('/', async (req, res) => {
     const partial = req.query.partial === '1' || req.query.partial === 'true'
     const cacheKey = buildPlaylistCacheKey(source, url, partial)
     const cached = getCachedPlaylist(cacheKey)
+    const allowIds = req.user?.id ? getStoredActiveSourceIds(req.user.id) : null
+    const loadSheet = AVAILABLE_SOURCES[source]
+      ? () => fetchPlaylist(source, url, { partial })
+      : () => fetchPluginSheet(source, url, allowIds)
     const data = cached || await getOrFetchPlaylist(cacheKey, () => playlistLimiter(() => withTimeout(
-      fetchPlaylist(source, url, { partial }),
+      loadSheet(),
       partial ? 30000 : PLAYLIST_TIMEOUT_MS,
       '获取歌单超时，请稍后重试',
     )))

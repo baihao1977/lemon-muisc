@@ -225,9 +225,24 @@ export const api = {
     exportScript: (id) => request(`/source/${encodeURIComponent(id)}/export`),
     remove: (id) => request(`/source/${id}`, { method: 'DELETE' }),
     activate: (id) => request(`/source/activate/${id}`, { method: 'POST', timeout: 25000 }),
+    activateBatch: (ids) => request('/source/batch/activate', {
+      method: 'POST',
+      body: { ids },
+      timeout: 180000,
+    }),
     deactivate: (id) => id
       ? request(`/source/deactivate/${encodeURIComponent(id)}`, { method: 'POST', timeout: 15000 })
       : request('/source/deactivate', { method: 'POST', timeout: 15000 }),
+    deactivateBatch: (ids) => request('/source/batch/deactivate', {
+      method: 'POST',
+      body: { ids },
+      timeout: 60000,
+    }),
+    removeBatch: (ids) => request('/source/batch/delete', {
+      method: 'POST',
+      body: { ids },
+      timeout: 60000,
+    }),
     active: () => request('/source/active'),
     getFault: () => request('/source/fault'),
     deleteFault: () => request('/source/fault/delete', { method: 'POST' }),

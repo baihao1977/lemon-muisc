@@ -680,6 +680,38 @@
           </div>
         </div>
 
+        <div v-if="sourceList.length" class="source-batch-toolbar">
+          <label class="source-select-all">
+            <input
+              type="checkbox"
+              :checked="allSourcesSelected"
+              :indeterminate="someSourcesSelected && !allSourcesSelected"
+              @change="toggleSelectAllSources"
+            />
+            全选
+          </label>
+          <span class="hint">已选 {{ selectedSourceIds.length }}</span>
+          <button
+            class="btn-sm btn-primary"
+            type="button"
+            :disabled="!!sourceBatchBusy || !selectedSourceIds.length"
+            @click="batchActivateSources"
+          >{{ sourceBatchBusy === 'activate' ? '启用中…' : '批量启用' }}</button>
+          <button
+            class="btn-sm btn-ghost"
+            type="button"
+            :disabled="!!sourceBatchBusy || !selectedSourceIds.length"
+            @click="batchDeactivateSources"
+          >{{ sourceBatchBusy === 'deactivate' ? '停用中…' : '批量停用' }}</button>
+          <button
+            v-if="isAdminUser"
+            class="btn-sm btn-danger"
+            type="button"
+            :disabled="!!sourceBatchBusy || !selectedSourceIds.length"
+            @click="batchRemoveSources"
+          >{{ sourceBatchBusy === 'delete' ? '删除中…' : '批量删除' }}</button>
+        </div>
+
         <div v-if="isAdminUser" class="source-admin-toolbar">
           <button
             class="btn-ghost btn-sm"
@@ -704,6 +736,7 @@
             class="source-item"
             :class="{
               active: isSourceActive(s.id),
+              selected: isSourceSelected(s.id),
               unhealthy: s.health?.unhealthy,
               'health-mixed': s.health?.unhealthy && s.health?.level === 'mixed',
               'health-preview': s.health?.unhealthy && s.health?.level === 'preview',
@@ -711,6 +744,13 @@
             }"
           >
             <div class="source-item-main">
+              <label class="source-check" @click.stop>
+                <input
+                  type="checkbox"
+                  :checked="isSourceSelected(s.id)"
+                  @change="toggleSourceSelected(s.id)"
+                />
+              </label>
               <div class="source-info">
                 <div class="source-name-row">
                   <span class="source-name">{{ s.name }}</span>
@@ -764,15 +804,17 @@
                 >{{ sourceUpdatingId === s.id ? '更新中…' : '更新' }}</button>
                 <button
                   v-if="!isSourceActive(s.id)"
+                  type="button"
                   class="btn-sm btn-primary"
-                  :disabled="sourceBusyId === s.id || importingUrl || importingFiles"
-                  @click="activateSource(s.id)"
+                  :disabled="sourceBusyId === s.id || !!sourceBatchBusy || importingUrl || importingFiles"
+                  @click.stop="activateSource(s.id)"
                 >{{ sourceBusyId === s.id ? '激活中…' : '激活' }}</button>
                 <button
                   v-else
+                  type="button"
                   class="btn-sm btn-ghost"
-                  :disabled="sourceBusyId === s.id"
-                  @click="deactivateSource(s.id)"
+                  :disabled="sourceBusyId === s.id || !!sourceBatchBusy"
+                  @click.stop="deactivateSource(s.id)"
                 >{{ sourceBusyId === s.id ? '停用中…' : '停用' }}</button>
                 <button
                   v-if="isAdminUser"
@@ -780,13 +822,14 @@
                   type="button"
                   title="保存到下载目录下的「音源导出」文件夹"
                   :disabled="sourceBusyId === s.id || exportingSourceId === s.id"
-                  @click="exportSource(s)"
+                  @click.stop="exportSource(s)"
                 >{{ exportingSourceId === s.id ? '导出中…' : '导出' }}</button>
                 <button
                   v-if="isAdminUser"
+                  type="button"
                   class="btn-sm btn-danger"
-                  :disabled="sourceBusyId === s.id || importingUrl || importingFiles"
-                  @click="removeSource(s.id)"
+                  :disabled="sourceBusyId === s.id || !!sourceBatchBusy || importingUrl || importingFiles"
+                  @click.stop="removeSource(s.id)"
                 >删除</button>
               </div>
             </div>
@@ -801,21 +844,21 @@
         <div class="import-area" v-if="isAdminUser && importMode === 'file'">
           <input type="file" ref="fileInput" accept=".js,text/javascript" multiple @change="importFile" style="display:none" />
           <button class="btn-primary btn-sm" :disabled="importingFiles" @click="$refs.fileInput.click()">
-            {{ importingFiles ? '导入中…' : '选择文件' }}
+            {{ importingFilesLabel }}
           </button>
-          <span class="hint">可多选 .js；支持落雪兼容与澜音（CeruMusic）原生音源</span>
+          <span class="hint">可多选 .js；支持落雪、澜音（CeruMusic），以及 MusicFree / BakaMusic 插件</span>
         </div>
         <div class="import-area import-area-url" v-else-if="isAdminUser">
           <textarea
             v-model="importUrl"
             class="url-input url-textarea"
             rows="3"
-            placeholder="输入 .js 直链，多个用英文逗号或换行分隔（GitHub / Gitee / gist）"
+            placeholder="输入 .js 直链或 MusicFree plugins.json，多个用逗号或换行分隔"
           />
           <button class="btn-primary btn-sm" @click="importFromUrl" :disabled="importingUrl">
-            {{ importingUrl ? '导入中...' : '导入' }}
+            {{ importingUrlLabel }}
           </button>
-          <span class="hint">多个地址可用逗号或换行分开；GitHub 失败会自动换镜像</span>
+          <span class="hint">多个地址可用逗号或换行分开；GitHub 失败会自动换镜像。plugins.json 会展开为其中的插件脚本</span>
         </div>
 
         <div class="playlist-sync-settings card-inner">
@@ -1433,7 +1476,7 @@ import { reloadDiscoverSources } from '../stores/discover.js'
 import { applySourceFallbackMode, SOURCE_FALLBACK_MODE_KEY } from '../stores/sourceFallback.js'
 import { isAdmin as isAdminUser, currentUser as currentAuthUser, patchLocalUser } from '../utils/auth.js'
 import { canPickFolder, pickFolder } from '../utils/fnos.js'
-import { appAlert, appPrompt } from '../stores/appDialog.js'
+import { appAlert, appConfirm, appPrompt } from '../stores/appDialog.js'
 import { applyTheme, theme as currentTheme, THEME_KEY, COLOR_SCHEME_KEY, CUSTOM_COLOR_KEY, COLOR_SCHEME_OPTIONS, applyColorScheme, setCustomColor, normalizeHex, colorScheme as currentColorScheme, customColor as currentCustomColor } from '../utils/theme.js'
 import {
   LYRIC_COLOR_PRESETS,
@@ -1568,6 +1611,39 @@ const importMode = ref('file')
 const importUrl = ref('')
 const importingUrl = ref(false)
 const importingFiles = ref(false)
+const importElapsedSec = ref(0)
+let importElapsedTimer = 0
+
+function startImportElapsed() {
+  importElapsedSec.value = 0
+  if (importElapsedTimer) clearInterval(importElapsedTimer)
+  importElapsedTimer = window.setInterval(() => {
+    importElapsedSec.value += 1
+  }, 1000)
+}
+
+function stopImportElapsed() {
+  if (importElapsedTimer) {
+    clearInterval(importElapsedTimer)
+    importElapsedTimer = 0
+  }
+  importElapsedSec.value = 0
+}
+
+function formatImportWait(sec) {
+  const n = Math.max(0, Number(sec) || 0)
+  if (n < 60) return `导入中 ${n}s`
+  const m = Math.floor(n / 60)
+  const s = n % 60
+  return `导入中 ${m}:${String(s).padStart(2, '0')}`
+}
+
+const importingUrlLabel = computed(() => (
+  importingUrl.value ? formatImportWait(importElapsedSec.value) : '导入'
+))
+const importingFilesLabel = computed(() => (
+  importingFiles.value ? formatImportWait(importElapsedSec.value) : '选择文件'
+))
 const checkingSourceUpdates = ref(false)
 const sourceUpdatingId = ref('')
 const sourceUpdatingAll = ref(false)
@@ -1581,6 +1657,29 @@ function sourceCanApplyUpdate(id) {
 const outdatedSourceCount = computed(() =>
   sourceList.value.filter((s) => sourceCanApplyUpdate(s.id)).length,
 )
+const selectedSourceIds = ref([])
+const sourceBatchBusy = ref('')
+const allSourcesSelected = computed(() => (
+  sourceList.value.length > 0 && selectedSourceIds.value.length === sourceList.value.length
+))
+const someSourcesSelected = computed(() => selectedSourceIds.value.length > 0)
+
+function isSourceSelected(id) {
+  return selectedSourceIds.value.includes(id)
+}
+
+function toggleSourceSelected(id) {
+  if (!id) return
+  if (selectedSourceIds.value.includes(id)) {
+    selectedSourceIds.value = selectedSourceIds.value.filter((x) => x !== id)
+  } else {
+    selectedSourceIds.value = [...selectedSourceIds.value, id]
+  }
+}
+
+function toggleSelectAllSources(ev) {
+  selectedSourceIds.value = ev.target.checked ? sourceList.value.map((s) => s.id) : []
+}
 /** 正在激活/停用的音源 id，避免无反馈空等像卡死 */
 const sourceBusyId = ref('')
 const exportingSourceId = ref('')
@@ -2433,8 +2532,11 @@ onMounted(async () => {
   } catch {}
   try {
     sourceList.value = await api.source.list()
-    const fromList = sourceList.value.filter(s => s.active).map(s => s.id)
-    if (fromList.length) activeSourceIds.value = fromList
+    // 始终以列表的 active 为准（含全部未激活 → 清空），避免本地残留导致「停用」点了没变化
+    activeSourceIds.value = sourceList.value.filter((s) => s.active).map((s) => s.id)
+    settings['source.active'] = activeSourceIds.value.length
+      ? JSON.stringify(activeSourceIds.value)
+      : '[]'
   } catch {}
   // 音源列表就绪后再同步，便于把旧版全局平台开关摊到各音源
   const hadGlobalPlatforms = Array.isArray(parseSourcePlatformMap(settings[ENABLED_PLATFORMS_KEY]).__global__)
@@ -2461,6 +2563,7 @@ onActivated(() => {
 
 onUnmounted(() => {
   stopFfmpegPoll()
+  stopImportElapsed()
   clearTimeout(customColorSaveTimer)
   clearTimeout(lyricColorSaveTimer)
   if (platformSaveTimer) clearTimeout(platformSaveTimer)
@@ -3355,6 +3458,7 @@ async function importFile(e) {
   const files = [...(e.target.files || [])]
   if (!files.length || importingFiles.value) return
   importingFiles.value = true
+  startImportElapsed()
   try {
     const res = await api.source.importFile(files)
     if (res.error) throw new Error(res.error)
@@ -3374,6 +3478,7 @@ async function importFile(e) {
     showToast(err.message, 'error')
   } finally {
     importingFiles.value = false
+    stopImportElapsed()
     e.target.value = ''
   }
 }
@@ -3385,6 +3490,7 @@ async function importFromUrl() {
     return
   }
   importingUrl.value = true
+  startImportElapsed()
   try {
     const res = await api.source.importUrl(urls.length === 1 ? urls[0] : urls)
     if (res.error) throw new Error(res.error)
@@ -3407,6 +3513,7 @@ async function importFromUrl() {
     showToast(err.message || '导入失败', 'error')
   } finally {
     importingUrl.value = false
+    stopImportElapsed()
   }
 }
 
@@ -3439,6 +3546,20 @@ async function refreshPlatformTabs() {
     reloadSearchSources(api),
     reloadDiscoverSources(api),
   ])
+}
+
+function syncActiveIdsFromServer(ids) {
+  const next = Array.isArray(ids) ? [...new Set(ids.map(String).filter(Boolean))] : []
+  activeSourceIds.value = next
+  settings['source.active'] = next.length ? JSON.stringify(next) : '[]'
+  sourceList.value = sourceList.value.map((s) => ({
+    ...s,
+    active: next.includes(s.id),
+  }))
+}
+
+function refreshPlatformTabsLater() {
+  refreshPlatformTabs().catch(() => {})
 }
 
 function syncEnabledPlatformsFromSettings() {
@@ -3670,29 +3791,38 @@ function setSourcePlatformsAll(source, on) {
 }
 
 async function activateSource(id) {
-  if (!id || sourceBusyId.value) return
+  if (!id) return
+  if (sourceBusyId.value) {
+    if (sourceBusyId.value === id) return
+    showToast('请等待当前音源操作完成', 'info')
+    return
+  }
+  if (sourceBatchBusy.value) {
+    showToast('批量操作进行中，请稍候', 'info')
+    return
+  }
   sourceBusyId.value = id
   try {
     const res = await api.source.activate(id)
     if (Array.isArray(res?.activeIds)) {
-      activeSourceIds.value = res.activeIds
+      syncActiveIdsFromServer(res.activeIds)
     } else if (!activeSourceIds.value.includes(id)) {
-      activeSourceIds.value = [...activeSourceIds.value, id]
+      syncActiveIdsFromServer([...activeSourceIds.value, id])
     }
     sourceList.value = sourceList.value.map((s) => (
       s.id === id
         ? { ...s, active: true, sources: res.sources || s.sources }
-        : { ...s, active: activeSourceIds.value.includes(s.id) }
+        : s
     ))
     sourcePlatformMap.value = mergeDeclaredPlatformsIntoMap(sourcePlatformMap.value)
     schedulePersistEnabledPlatforms()
     showToast('音源已激活', 'success')
-    await refreshPlatformTabs()
   } catch (e) {
     showToast(e.message || '激活失败', 'error')
   } finally {
     sourceBusyId.value = ''
   }
+  refreshPlatformTabsLater()
 }
 
 async function dismissSourceHealth(s) {
@@ -3726,26 +3856,31 @@ function platformHealthTitle(p) {
 }
 
 async function deactivateSource(id) {
-  if (!id || sourceBusyId.value) return
+  if (!id) return
+  if (sourceBusyId.value) {
+    if (sourceBusyId.value === id) return
+    showToast('请等待当前音源操作完成', 'info')
+    return
+  }
+  if (sourceBatchBusy.value) {
+    showToast('批量操作进行中，请稍候', 'info')
+    return
+  }
   sourceBusyId.value = id
   try {
     const res = await api.source.deactivate(id)
     if (Array.isArray(res?.activeIds)) {
-      activeSourceIds.value = res.activeIds
+      syncActiveIdsFromServer(res.activeIds)
     } else {
-      activeSourceIds.value = activeSourceIds.value.filter(x => x !== id)
+      syncActiveIdsFromServer(activeSourceIds.value.filter((x) => x !== id))
     }
-    sourceList.value = sourceList.value.map(s => ({
-      ...s,
-      active: activeSourceIds.value.includes(s.id),
-    }))
     showToast('音源已停用', 'success')
-    await refreshPlatformTabs()
   } catch (e) {
     showToast(e.message || '停用失败', 'error')
   } finally {
     sourceBusyId.value = ''
   }
+  refreshPlatformTabsLater()
 }
 
 async function exportSource(source) {
@@ -3778,6 +3913,7 @@ async function removeSource(id) {
     await api.source.remove(id)
     sourceList.value = sourceList.value.filter(s => s.id !== id)
     activeSourceIds.value = activeSourceIds.value.filter(x => x !== id)
+    selectedSourceIds.value = selectedSourceIds.value.filter((x) => x !== id)
     if (expandedSourceId.value === id) expandedSourceId.value = ''
     if (Object.prototype.hasOwnProperty.call(sourcePlatformMap.value, id)) {
       const next = { ...sourcePlatformMap.value }
@@ -3789,6 +3925,107 @@ async function removeSource(id) {
     await refreshPlatformTabs()
   } catch (e) {
     showToast(e.message, 'error')
+  }
+}
+
+function dropSelectedSourceIds(ids) {
+  const drop = new Set(ids)
+  selectedSourceIds.value = selectedSourceIds.value.filter((id) => !drop.has(id))
+}
+
+async function batchActivateSources() {
+  const ids = [...selectedSourceIds.value]
+  if (!ids.length || sourceBatchBusy.value) return
+  if (sourceBusyId.value) {
+    showToast('请等待当前音源操作完成', 'info')
+    return
+  }
+  sourceBatchBusy.value = 'activate'
+  try {
+    const res = await api.source.activateBatch(ids)
+    if (Array.isArray(res?.activeIds)) syncActiveIdsFromServer(res.activeIds)
+    const okMap = new Map((res.results || []).map((row) => [row.id, row]))
+    sourceList.value = sourceList.value.map((s) => {
+      const hit = okMap.get(s.id)
+      return {
+        ...s,
+        active: activeSourceIds.value.includes(s.id),
+        sources: hit?.sources || s.sources,
+        name: hit?.name || s.name,
+      }
+    })
+    sourcePlatformMap.value = mergeDeclaredPlatformsIntoMap(sourcePlatformMap.value)
+    schedulePersistEnabledPlatforms()
+    const failed = res.errors?.length || 0
+    if (failed && res.results?.length) showToast(`已启用 ${res.results.length} 个，失败 ${failed} 个`, 'error')
+    else if (failed) showToast(res.errors[0]?.error || '批量启用失败', 'error')
+    else showToast(`已启用 ${ids.length} 个音源`, 'success')
+  } catch (e) {
+    showToast(e.message || '批量启用失败', 'error')
+  } finally {
+    sourceBatchBusy.value = ''
+  }
+  refreshPlatformTabsLater()
+}
+
+async function batchDeactivateSources() {
+  const ids = [...selectedSourceIds.value]
+  if (!ids.length || sourceBatchBusy.value) return
+  if (sourceBusyId.value) {
+    showToast('请等待当前音源操作完成', 'info')
+    return
+  }
+  sourceBatchBusy.value = 'deactivate'
+  try {
+    const res = await api.source.deactivateBatch(ids)
+    if (Array.isArray(res?.activeIds)) syncActiveIdsFromServer(res.activeIds)
+    else syncActiveIdsFromServer(activeSourceIds.value.filter((id) => !ids.includes(id)))
+    showToast(`已停用 ${ids.length} 个音源`, 'success')
+  } catch (e) {
+    showToast(e.message || '批量停用失败', 'error')
+  } finally {
+    sourceBatchBusy.value = ''
+  }
+  refreshPlatformTabsLater()
+}
+
+async function batchRemoveSources() {
+  const ids = [...selectedSourceIds.value]
+  if (!ids.length || sourceBatchBusy.value || !isAdminUser.value) return
+  const ok = await appConfirm({
+    title: '批量删除音源',
+    message: `确定删除选中的 ${ids.length} 个音源？此操作不可恢复。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  sourceBatchBusy.value = 'delete'
+  try {
+    const res = await api.source.removeBatch(ids)
+    const deleted = new Set(res.deleted || ids)
+    sourceList.value = sourceList.value.filter((s) => !deleted.has(s.id))
+    if (Array.isArray(res.activeIds)) activeSourceIds.value = res.activeIds
+    else activeSourceIds.value = activeSourceIds.value.filter((id) => !deleted.has(id))
+    dropSelectedSourceIds([...deleted])
+    if (deleted.has(expandedSourceId.value)) expandedSourceId.value = ''
+    const nextMap = { ...sourcePlatformMap.value }
+    let mapChanged = false
+    for (const id of deleted) {
+      if (Object.prototype.hasOwnProperty.call(nextMap, id)) {
+        delete nextMap[id]
+        mapChanged = true
+      }
+    }
+    if (mapChanged) {
+      sourcePlatformMap.value = nextMap
+      schedulePersistEnabledPlatforms()
+    }
+    showToast(`已删除 ${deleted.size} 个音源`, 'success')
+    await refreshPlatformTabs()
+  } catch (e) {
+    showToast(e.message || '批量删除失败', 'error')
+  } finally {
+    sourceBatchBusy.value = ''
   }
 }
 
@@ -4652,12 +4889,34 @@ function showToast(text, type = 'info') {
 .pill-tab:hover { background: var(--bg-hover); }
 .pill-tab.active { color: #fff; }
 
+.source-batch-toolbar,
 .source-admin-toolbar {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
   margin: 0 0 12px;
+}
+.source-select-all,
+.source-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+.source-check input,
+.source-select-all input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent, #3d8bfd);
+}
+.source-item.selected {
+  border-color: color-mix(in srgb, var(--accent, #3d8bfd) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent, #3d8bfd) 8%, var(--bg-input));
 }
 .source-update-badge {
   display: inline-flex;
@@ -4853,7 +5112,7 @@ function showToast(text, type = 'info') {
   padding: 10px 20px;
   border-radius: var(--radius);
   font-size: 14px;
-  z-index: 1000;
+  z-index: 13000;
   animation: fadeIn 0.2s;
   box-shadow: var(--shadow);
 }
@@ -4918,7 +5177,8 @@ function showToast(text, type = 'info') {
   }
   .path-actions { width: 100%; }
   .path-manual { flex-direction: column; }
-  .source-item-main { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .source-item-main { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+  .source-info { flex: 1 1 180px; }
   .source-actions { width: 100%; }
   .source-platform-wrap {
     margin-left: auto;

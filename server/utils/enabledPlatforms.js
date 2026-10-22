@@ -94,12 +94,16 @@ export function isSourcePlatformEnabled(userId, sourceId, platform) {
   if (!sid || !userId) return true
 
   const map = getSourcePlatformMap(userId)
+  const declared = platformsDeclaredBySource(sid)
+  const extraDeclared = declared.filter((k) => !CORE_PLATFORM_ORDER.includes(k))
   if (Object.prototype.hasOwnProperty.call(map, sid)) {
-    return map[sid].includes(key)
+    if (map[sid].includes(key)) return true
+    return extraDeclared.includes(key)
   }
   // 旧版全局开关：对所有音源生效
   if (Object.prototype.hasOwnProperty.call(map, '__global__')) {
-    return map.__global__.includes(key)
+    if (map.__global__.includes(key)) return true
+    return extraDeclared.includes(key)
   }
   return platformsDeclaredBySource(sid).includes(key)
 }
@@ -118,7 +122,9 @@ export function getEnabledPlatforms(userId = null) {
     if (Object.prototype.hasOwnProperty.call(map, id)) list = map[id]
     else if (Object.prototype.hasOwnProperty.call(map, '__global__')) list = map.__global__
     else list = platformsDeclaredBySource(id)
-    for (const p of list) enabled.add(p)
+    const declared = platformsDeclaredBySource(id)
+    const extra = declared.filter((k) => !CORE_PLATFORM_ORDER.includes(k))
+    for (const p of [...list, ...extra]) enabled.add(p)
   }
   return orderPlatformKeys([...enabled])
 }

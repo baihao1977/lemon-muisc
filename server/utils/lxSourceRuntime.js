@@ -73,13 +73,14 @@ export function createLxUtils() {
 }
 
 /** 音源脚本常用的受限 require，避免完全裸奔 Node */
-export function createSandboxRequire() {
+export function createSandboxRequire(extraModules = {}) {
   const modules = {
     crypto,
     zlib,
     buffer: { Buffer },
     querystring,
     url,
+    ...extraModules,
   }
 
   return function require(name) {

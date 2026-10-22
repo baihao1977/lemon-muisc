@@ -36,7 +36,7 @@ function toDisplayEntry(key, info = {}) {
     name: resolveSourceDisplayName(key, info.name),
     qualitys: info.qualitys || [],
     actions: info.actions || [],
-    searchable: Boolean(builtin), // 汽水/B站等无内置搜索 SDK，仅用于脚本取链
+    searchable: Boolean(builtin) || info.searchable === true,
   }
 }
 
@@ -56,6 +56,7 @@ export function getMergedSourcesForUser(userId, allowedSourceIds = null) {
           type: info.type || 'music',
           actions: [...(info.actions || [])],
           qualitys: [...(info.qualitys || [])],
+          searchable: info.searchable === true,
         }
         continue
       }
@@ -66,6 +67,7 @@ export function getMergedSourcesForUser(userId, allowedSourceIds = null) {
       for (const q of info.qualitys || []) {
         if (!cur.qualitys.includes(q)) cur.qualitys.push(q)
       }
+      if (info.searchable) cur.searchable = true
     }
   }
   return merged

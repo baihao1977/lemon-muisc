@@ -30,6 +30,7 @@ import {
   sourceHealthPublicView,
 } from '../utils/sourceHealth.js'
 import { parseScriptMeta, metaToDbFields, scriptUpdateUrl } from '../utils/parseScriptMeta.js'
+import { peekPluginMeta, tryParsePluginManifest } from '../utils/musicFreeRuntime.js'
 import { fetchSourceScriptFromUrl } from '../utils/fetchSourceScript.js'
 import { compareVersion } from '../utils/version.js'
 import { requireAdmin } from '../middleware/auth.js'
@@ -50,7 +51,15 @@ function newUserApiId() {
 
 function insertUserApi(script, metaExtra = {}) {
   const meta = parseScriptMeta(script)
-  const fields = metaToDbFields(meta, metaExtra)
+  const peek = peekPluginMeta(script)
+  const fields = metaToDbFields(meta, {
+    ...metaExtra,
+    name: metaExtra.name || meta.name || peek.name,
+    version: metaExtra.version || meta.version || peek.version,
+    author: metaExtra.author || meta.author || peek.author,
+    homepage: metaExtra.homepage || meta.homepage || peek.homepage,
+    description: metaExtra.description || meta.description || peek.description,
+  })
   const id = newUserApiId()
   getDB().prepare(`
     INSERT INTO user_apis (id, name, description, script, author, version, homepage, sources)
@@ -72,16 +81,22 @@ export function splitSourceUrls(raw) {
     .filter((u) => /^https?:\/\//i.test(u))
 }
 
+function storedNameIsPlaceholder(name) {
+  const n = String(name || '').trim()
+  return !n || n === '未命名音源'
+}
+
 function applyScriptUpdate(id, script, homepageHint = '') {
   const row = getDB().prepare('SELECT * FROM user_apis WHERE id = ?').get(id)
   if (!row) throw new Error('音源不存在')
   const meta = parseScriptMeta(script)
+  const peek = peekPluginMeta(script)
   const fields = metaToDbFields(meta, {
-    name: row.name,
-    description: row.description,
-    author: row.author,
-    version: row.version,
-    homepage: homepageHint || row.homepage,
+    name: storedNameIsPlaceholder(row.name) ? (peek.name || meta.name || row.name) : row.name,
+    description: row.description || peek.description,
+    author: row.author || peek.author,
+    version: row.version || peek.version,
+    homepage: homepageHint || row.homepage || peek.homepage,
   })
   // 保留原 homepage（导入 URL），除非脚本自带 @homepage 且原先为空
   const homepage = row.homepage || fields.homepage || homepageHint || ''
@@ -110,8 +125,32 @@ async function fetchScriptFromUrl(url) {
   return fetchSourceScriptFromUrl(url)
 }
 
+function repairUnnamedSourceNames() {
+  const rows = getDB().prepare(`
+    SELECT id, script, name, author, version, homepage
+    FROM user_apis
+    WHERE name IS NULL OR TRIM(name) = '' OR name = '未命名音源'
+  `).all()
+  if (!rows.length) return
+  const update = getDB().prepare(`
+    UPDATE user_apis SET name = ?, author = ?, version = ?, homepage = ? WHERE id = ?
+  `)
+  for (const row of rows) {
+    const peek = peekPluginMeta(row.script)
+    if (!peek.name) continue
+    update.run(
+      peek.name,
+      row.author || peek.author || '',
+      row.version || peek.version || '',
+      row.homepage || peek.homepage || '',
+      row.id,
+    )
+  }
+}
+
 sourceRouter.get('/list', (req, res) => {
   // 勿在每次列表时 refreshStoredSourceMeta：会把全部脚本读进内存并同步解析，大音源导入后易把事件循环卡住
+  repairUnnamedSourceNames()
   const activeIds = new Set(getStoredActiveSourceIds(req.user?.id))
   const healthMap = getAllSourceHealth()
   const rows = getDB().prepare('SELECT id, name, description, author, version, homepage, sources FROM user_apis').all()
@@ -172,33 +211,67 @@ sourceRouter.post('/import', requireAdmin, upload.any(), (req, res) => {
   }
 })
 
+function asImportJob(item) {
+  if (typeof item === 'string') return { url: item, name: '', version: '', author: '' }
+  return {
+    url: String(item?.url || '').trim(),
+    name: String(item?.name || '').trim(),
+    version: String(item?.version || '').trim(),
+    author: String(item?.author || '').trim(),
+  }
+}
+
+async function collectImportScripts(urls, depth = 0) {
+  const results = []
+  const errors = []
+  const seen = new Set()
+  const queue = (urls || []).map(asImportJob)
+  while (queue.length) {
+    const job = queue.shift()
+    const url = job?.url
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    if (seen.size > 40) {
+      errors.push({ url, error: '订阅列表超过 40 条，已截断' })
+      break
+    }
+    try {
+      const script = await fetchScriptFromUrl(url)
+      const nested = depth < 2 ? tryParsePluginManifest(script, url) : null
+      if (nested?.length) {
+        queue.push(...nested.map(asImportJob))
+        continue
+      }
+      results.push({
+        ...insertUserApi(script, {
+          homepage: url,
+          name: job.name,
+          version: job.version,
+          author: job.author,
+        }),
+        url,
+      })
+    } catch (e) {
+      errors.push({ url, error: e.message })
+    }
+  }
+  return { results, errors }
+}
+
 sourceRouter.post('/import-url', requireAdmin, async (req, res) => {
   try {
     const urls = splitSourceUrls(req.body?.urls ?? req.body?.url)
     if (!urls.length) return res.status(400).json({ error: '请提供音源链接（多个可用逗号或换行分隔）' })
 
-    if (urls.length === 1) {
-      const url = urls[0]
-      const script = await fetchScriptFromUrl(url)
-      const result = insertUserApi(script, { homepage: url })
-      return res.json({ ok: true, ...result })
-    }
-
-    const results = []
-    const errors = []
-    for (const url of urls) {
-      try {
-        const script = await fetchScriptFromUrl(url)
-        results.push({ ...insertUserApi(script, { homepage: url }), url })
-      } catch (e) {
-        errors.push({ url, error: e.message })
-      }
-    }
+    const { results, errors } = await collectImportScripts(urls)
     if (!results.length) {
       return res.status(500).json({
         error: errors[0]?.error || '全部导入失败',
         errors,
       })
+    }
+    if (urls.length === 1 && results.length === 1 && !errors.length) {
+      return res.json({ ok: true, ...results[0] })
     }
     res.json({
       ok: true,
@@ -435,12 +508,7 @@ sourceRouter.get('/:id/export', requireAdmin, (req, res) => {
 })
 
 sourceRouter.delete('/:id', requireAdmin, (req, res) => {
-  unloadSource(req.params.id)
-  removeActiveSourceIdFromAllUsers(req.params.id)
-  getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(req.params.id)
-  const fault = getSourceFault()
-  if (fault?.id === req.params.id) clearSourceFault()
-  clearSourceHealth(req.params.id)
+  deleteUserApi(req.params.id)
   res.json({ ok: true })
 })
 
@@ -568,58 +636,129 @@ sourceRouter.post('/fault/reimport', requireAdmin, async (_req, res) => {
   }
 })
 
+function normalizeSourceIds(raw) {
+  const list = Array.isArray(raw) ? raw : []
+  return [...new Set(list.map((id) => String(id || '').trim()).filter(Boolean))]
+}
+
+async function activateUserApi(id, userId) {
+  const row = getDB().prepare('SELECT * FROM user_apis WHERE id = ?').get(id)
+  if (!row) {
+    const err = new Error('音源不存在')
+    err.status = 404
+    throw err
+  }
+  const meta = parseScriptMeta(row.script)
+  const peek = peekPluginMeta(row.script)
+  const fields = metaToDbFields(meta, {
+    name: storedNameIsPlaceholder(row.name) ? (peek.name || meta.name || row.name) : row.name,
+    description: row.description || peek.description,
+    author: row.author || peek.author,
+    version: row.version || peek.version,
+    homepage: row.homepage || peek.homepage,
+  })
+  const alreadyLoaded = getActiveSourceIds().includes(row.id)
+  const sources = alreadyLoaded
+    ? (getActiveSources().find((s) => s.id === row.id)?.sources || JSON.parse(row.sources || '{}'))
+    : await loadSource(row.id, row.script)
+  const ids = addActiveSourceId(row.id, userId)
+  getDB().prepare(`
+    UPDATE user_apis SET name = ?, description = ?, author = ?, version = ?, homepage = ?, sources = ? WHERE id = ?
+  `).run(fields.name, fields.description, fields.author, fields.version, fields.homepage, JSON.stringify(sources), row.id)
+  const fault = getSourceFault()
+  if (fault?.id === row.id) clearSourceFault()
+  return { id: row.id, sources, name: fields.name, activeIds: ids }
+}
+
+function deactivateUserApi(id, userId) {
+  const ids = removeActiveSourceId(id, userId)
+  if (!isSourceActiveForAnyUser(id)) unloadSource(id)
+  return ids
+}
+
+function deleteUserApi(id) {
+  unloadSource(id)
+  removeActiveSourceIdFromAllUsers(id)
+  getDB().prepare('DELETE FROM user_apis WHERE id = ?').run(id)
+  const fault = getSourceFault()
+  if (fault?.id === id) clearSourceFault()
+  clearSourceHealth(id)
+}
+
+sourceRouter.post('/batch/activate', async (req, res) => {
+  const ids = normalizeSourceIds(req.body?.ids)
+  if (!ids.length) return res.status(400).json({ error: '请选择要启用的音源' })
+  const results = []
+  const errors = []
+  let activeIds = getStoredActiveSourceIds(req.user.id)
+  for (const id of ids) {
+    try {
+      const result = await activateUserApi(id, req.user.id)
+      activeIds = result.activeIds
+      results.push({ id, name: result.name, sources: result.sources })
+    } catch (e) {
+      const { formatUserError } = await import('../utils/userError.js')
+      const msg = formatUserError(e, '音源激活失败，请稍后重试')
+      recordSourceFault(id, e)
+      errors.push({ id, error: msg })
+    }
+  }
+  res.json({
+    ok: results.length > 0,
+    imported: results.length,
+    failed: errors.length,
+    results,
+    errors,
+    activeIds,
+    mergedSources: getMergedSources(activeIds),
+  })
+})
+
+sourceRouter.post('/batch/deactivate', (req, res) => {
+  const ids = normalizeSourceIds(req.body?.ids)
+  if (!ids.length) return res.status(400).json({ error: '请选择要停用的音源' })
+  let activeIds = getStoredActiveSourceIds(req.user.id)
+  for (const id of ids) activeIds = deactivateUserApi(id, req.user.id)
+  res.json({ ok: true, activeIds })
+})
+
+sourceRouter.post('/batch/delete', requireAdmin, (req, res) => {
+  const ids = normalizeSourceIds(req.body?.ids)
+  if (!ids.length) return res.status(400).json({ error: '请选择要删除的音源' })
+  const deleted = []
+  for (const id of ids) {
+    const row = getDB().prepare('SELECT id FROM user_apis WHERE id = ?').get(id)
+    if (!row) continue
+    deleteUserApi(id)
+    deleted.push(id)
+  }
+  res.json({ ok: true, deleted, activeIds: getStoredActiveSourceIds(req.user.id) })
+})
+
 sourceRouter.post('/activate/:id', async (req, res) => {
   try {
-    const row = getDB().prepare('SELECT * FROM user_apis WHERE id = ?').get(req.params.id)
-    if (!row) return res.status(404).json({ error: '音源不存在' })
-
-    const meta = parseScriptMeta(row.script)
-    const fields = metaToDbFields(meta, {
-      name: row.name,
-      description: row.description,
-      author: row.author,
-      version: row.version,
-      homepage: row.homepage,
-    })
-
-    // 沙箱按进程共享加载；激活状态按用户独立保存
-    const alreadyLoaded = getActiveSourceIds().includes(row.id)
-    const sources = alreadyLoaded
-      ? (getActiveSources().find((s) => s.id === row.id)?.sources || JSON.parse(row.sources || '{}'))
-      : await loadSource(row.id, row.script)
-
-    const ids = addActiveSourceId(row.id, req.user.id)
-    getDB().prepare(`
-      UPDATE user_apis SET name = ?, description = ?, author = ?, version = ?, homepage = ?, sources = ? WHERE id = ?
-    `).run(fields.name, fields.description, fields.author, fields.version, fields.homepage, JSON.stringify(sources), row.id)
-
-    const fault = getSourceFault()
-    if (fault?.id === row.id) clearSourceFault()
-
+    const result = await activateUserApi(req.params.id, req.user.id)
     res.json({
       ok: true,
-      sources,
-      name: fields.name,
-      activeIds: ids,
-      mergedSources: getMergedSources(ids),
+      sources: result.sources,
+      name: result.name,
+      activeIds: result.activeIds,
+      mergedSources: getMergedSources(result.activeIds),
     })
   } catch (e) {
     const { formatUserError } = await import('../utils/userError.js')
     const msg = formatUserError(e, '音源激活失败，请稍后重试')
-    if (recordSourceFault(req.params.id, e)) {
+    const status = e.status === 404 ? 404 : 500
+    if (status === 500 && recordSourceFault(req.params.id, e)) {
       res.status(500).json({ error: msg, fault: true })
     } else {
-      res.status(500).json({ error: msg })
+      res.status(status).json({ error: msg })
     }
   }
 })
 
 sourceRouter.post('/deactivate/:id', (req, res) => {
-  const ids = removeActiveSourceId(req.params.id, req.user.id)
-  // 仅当没有任何用户再激活时才卸载沙箱
-  if (!isSourceActiveForAnyUser(req.params.id)) {
-    unloadSource(req.params.id)
-  }
+  const ids = deactivateUserApi(req.params.id, req.user.id)
   res.json({ ok: true, activeIds: ids })
 })
 
@@ -670,13 +809,15 @@ export function refreshStoredSourceMeta() {
   `)
   for (const row of rows) {
     const meta = parseScriptMeta(row.script)
-    if (!meta.name && !meta.author && !meta.version) continue
+    const peek = peekPluginMeta(row.script)
+    const unnamed = storedNameIsPlaceholder(row.name)
+    if (!meta.name && !meta.author && !meta.version && !peek.name && !unnamed) continue
     const fields = metaToDbFields(meta, {
-      name: row.name,
-      description: row.description,
-      author: row.author,
-      version: row.version,
-      homepage: row.homepage,
+      name: unnamed ? (peek.name || meta.name || row.name) : (row.name || peek.name || meta.name),
+      description: row.description || peek.description,
+      author: row.author || peek.author || meta.author,
+      version: row.version || peek.version || meta.version,
+      homepage: row.homepage || peek.homepage,
     })
     if (fields.name === '未命名音源' && row.name !== '未命名音源') continue
     update.run(fields.name, fields.description, fields.author, fields.version, fields.homepage, row.id)

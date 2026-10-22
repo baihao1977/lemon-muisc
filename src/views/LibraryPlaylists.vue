@@ -412,12 +412,8 @@
                 class="track-play-count track-play-count--side"
               >{{ song.playCount }}次</span>
             </span>
-            <MobileRowActions
-              class="track-row-actions"
-              :open="actionsOpenKey === song.key"
-              @toggle="toggleRowActions(song.key)"
-              @close="actionsOpenKey = ''"
             >
+              class="track-row-actions"
               <button type="button" class="icon-action-btn" title="加入试听列表" @click.stop="queueOne(song)">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
@@ -1936,6 +1932,10 @@ function artistInitial(name) {
   line-height: 1.3;
 }
 .track-play-count--inline { display: none; }
+.track-play-count--side { margin-left: auto; }
+.track-sub-row {
+  display: flex;
+  align-items: center;
 .track-play-count-col {
   flex-shrink: 0;
   min-width: 3.5em;
@@ -2345,10 +2345,6 @@ function artistInitial(name) {
   .track-row :deep(.mobile-row-actions) {
     min-width: 0;
   }
-  .track-play-count--inline {
-    display: inline-flex;
-    align-items: center;
-    padding: 1px 6px;
     font-size: 11px;
   }
   .track-origin-badge {

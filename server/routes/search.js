@@ -1,5 +1,7 @@
-﻿import { Router } from 'express'
-import { searchMusic, searchAlbums, searchPlaylists, fetchAlbum } from '../musicSdk.js'
+import { Router } from 'express'
+import { AVAILABLE_SOURCES, searchMusic, searchAlbums, searchPlaylists, fetchAlbum } from '../musicSdk.js'
+import { fetchPluginAlbum, hasPluginSource, searchPluginMedia } from '../sourceManager.js'
+import { getStoredActiveSourceIds } from '../utils/activeSources.js'
 import { getDisplaySources } from '../utils/displaySources.js'
 import { formatUserError } from '../utils/userError.js'
 import { createLimiter, withTimeout } from '../utils/asyncLimit.js'
@@ -8,6 +10,19 @@ import { buildAlbumCacheKey, getCachedAlbum, getOrFetchAlbum } from '../utils/al
 export const searchRouter = Router()
 
 const availableSources = (req) => getDisplaySources(req.user?.id)
+const pluginAllowIds = (req) => (req.user?.id ? getStoredActiveSourceIds(req.user.id) : null)
+
+function queryText(req, key, fallback = '') {
+  const raw = req.query?.[key]
+  const v = Array.isArray(raw) ? raw[0] : raw
+  return String(v ?? fallback ?? '').trim()
+}
+
+function canUseSource(req, source) {
+  const info = availableSources(req)[source]
+  if (info && info.searchable !== false) return true
+  return hasPluginSource(source, pluginAllowIds(req))
+}
 const searchLimiter = createLimiter(4)
 const SEARCH_TIMEOUT_MS = 20000
 const ALBUM_TIMEOUT_MS = 45000
@@ -26,16 +41,19 @@ function sliceAlbumList(data, page, limit) {
 
 searchRouter.get('/album', async (req, res) => {
   try {
-    const { keyword, source = 'kw', page = 1, limit = 30 } = req.query
+    const keyword = queryText(req, 'keyword')
+    const source = queryText(req, 'source', 'kw')
+    const page = queryText(req, 'page', '1')
+    const limit = queryText(req, 'limit', '30')
     if (!keyword) return res.status(400).json({ error: '缺少搜索关键词' })
-    if (!availableSources(req)[source]) {
+    if (!canUseSource(req, source)) {
       return res.status(400).json({ error: `不支持的搜索源: ${source}` })
     }
-    if (availableSources(req)[source]?.searchable === false) {
-      return res.status(400).json({ error: '该平台由音源脚本提供取链，应用内暂不支持搜索' })
-    }
+    const run = AVAILABLE_SOURCES[source]
+      ? () => searchAlbums(keyword, source, Number(page), Number(limit))
+      : () => searchPluginMedia(source, keyword, Number(page), Number(limit), 'album', pluginAllowIds(req))
     const result = await searchLimiter(() => withTimeout(
-      searchAlbums(keyword, source, Number(page), Number(limit)),
+      run(),
       SEARCH_TIMEOUT_MS,
       '专辑搜索超时，请稍后重试',
     ))
@@ -47,16 +65,19 @@ searchRouter.get('/album', async (req, res) => {
 
 searchRouter.get('/playlist', async (req, res) => {
   try {
-    const { keyword, source = 'kw', page = 1, limit = 30 } = req.query
+    const keyword = queryText(req, 'keyword')
+    const source = queryText(req, 'source', 'kw')
+    const page = queryText(req, 'page', '1')
+    const limit = queryText(req, 'limit', '30')
     if (!keyword) return res.status(400).json({ error: '缺少搜索关键词' })
-    if (!availableSources(req)[source]) {
+    if (!canUseSource(req, source)) {
       return res.status(400).json({ error: `不支持的搜索源: ${source}` })
     }
-    if (availableSources(req)[source]?.searchable === false) {
-      return res.status(400).json({ error: '该平台由音源脚本提供取链，应用内暂不支持搜索' })
-    }
+    const run = AVAILABLE_SOURCES[source]
+      ? () => searchPlaylists(keyword, source, Number(page), Number(limit))
+      : () => searchPluginMedia(source, keyword, Number(page), Number(limit), 'sheet', pluginAllowIds(req))
     const result = await searchLimiter(() => withTimeout(
-      searchPlaylists(keyword, source, Number(page), Number(limit)),
+      run(),
       SEARCH_TIMEOUT_MS,
       '歌单搜索超时，请稍后重试',
     ))
@@ -68,18 +89,21 @@ searchRouter.get('/playlist', async (req, res) => {
 
 searchRouter.get('/album/detail', async (req, res) => {
   try {
-    const { source = 'kw', id, page = 1, limit = 0 } = req.query
+    const source = queryText(req, 'source', 'kw')
+    const id = queryText(req, 'id')
+    const page = queryText(req, 'page', '1')
+    const limit = queryText(req, 'limit', '0')
     if (!id) return res.status(400).json({ error: '缺少专辑 ID' })
-    if (!availableSources(req)[source]) {
+    if (!canUseSource(req, source)) {
       return res.status(400).json({ error: `不支持的平台: ${source}` })
-    }
-    if (availableSources(req)[source]?.searchable === false) {
-      return res.status(400).json({ error: '该平台由音源脚本提供取链，应用内暂不支持搜索' })
     }
     const cacheKey = buildAlbumCacheKey(source, id)
     const cached = getCachedAlbum(cacheKey)
+    const loadAlbum = AVAILABLE_SOURCES[source]
+      ? () => fetchAlbum(source, id)
+      : () => fetchPluginAlbum(source, id, pluginAllowIds(req))
     const data = cached || await getOrFetchAlbum(cacheKey, () => searchLimiter(() => withTimeout(
-      fetchAlbum(source, id),
+      loadAlbum(),
       ALBUM_TIMEOUT_MS,
       '获取专辑超时，请稍后重试',
     )))
@@ -96,18 +120,21 @@ searchRouter.get('/album/detail', async (req, res) => {
 
 searchRouter.get('/', async (req, res) => {
   try {
-    const { keyword, source = 'kw', page = 1, limit = 30 } = req.query
+    const keyword = queryText(req, 'keyword')
+    const source = queryText(req, 'source', 'kw')
+    const page = queryText(req, 'page', '1')
+    const limit = queryText(req, 'limit', '30')
     if (!keyword) return res.status(400).json({ error: '缺少搜索关键词' })
 
-    if (!availableSources(req)[source]) {
+    if (!canUseSource(req, source)) {
       return res.status(400).json({ error: `不支持的搜索源: ${source}` })
     }
-    if (availableSources(req)[source]?.searchable === false) {
-      return res.status(400).json({ error: '该平台由音源脚本提供取链，应用内暂不支持搜索' })
-    }
 
+    const run = AVAILABLE_SOURCES[source]
+      ? () => searchMusic(keyword, source, Number(page), Number(limit))
+      : () => searchPluginMedia(source, keyword, Number(page), Number(limit), 'music', pluginAllowIds(req))
     const result = await searchLimiter(() => withTimeout(
-      searchMusic(keyword, source, Number(page), Number(limit)),
+      run(),
       SEARCH_TIMEOUT_MS,
       '搜索超时，请稍后重试',
     ))

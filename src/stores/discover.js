@@ -1,4 +1,5 @@
 import { reactive, ref } from 'vue'
+import { registerPlatformLabels } from '../utils/platforms.js'
 
 export const discoverState = reactive({
   url: '',
@@ -60,6 +61,7 @@ export async function loadDiscoverSources(api, { force = false } = {}) {
   } catch {
     discoverState.sources = {}
   }
+  registerPlatformLabels(discoverState.sources)
   syncActiveSourceKey(discoverState)
   discoverSourcesLoaded.value = Object.keys(discoverState.sources).length > 0
 }

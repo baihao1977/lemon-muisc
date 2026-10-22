@@ -1,4 +1,5 @@
 import { reactive, ref } from 'vue'
+import { registerPlatformLabels } from '../utils/platforms.js'
 
 export const searchState = reactive({
   keyword: '',
@@ -43,6 +44,7 @@ export async function loadSearchSources(api, { force = false } = {}) {
   } catch {
     searchState.sources = {}
   }
+  registerPlatformLabels(searchState.sources)
   syncActiveSourceKey(searchState)
   // 只有拿到平台列表才标记已加载，避免空结果被永久缓存
   sourcesLoaded.value = Object.keys(searchState.sources).length > 0

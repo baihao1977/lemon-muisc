@@ -744,8 +744,9 @@ export const AVAILABLE_SOURCES = {
 
 export async function searchMusic(keyword, source, page = 1, limit = 30) {
   const fn = sdkMap[source]
-  if (!fn) throw new Error(`不支持的搜索源: ${source}`)
-  return fn(keyword, page, limit)
+  if (fn) return fn(keyword, page, limit)
+  const { searchPluginMedia } = await import('./sourceManager.js')
+  return searchPluginMedia(source, keyword, page, limit, 'music')
 }
 
 const WY_HEADERS = {
@@ -918,8 +919,9 @@ const albumSearchMap = {
 
 export async function searchAlbums(keyword, source, page = 1, limit = 30) {
   const fn = albumSearchMap[source]
-  if (!fn) throw new Error(`不支持的搜索源: ${source}`)
-  return fn(keyword, page, limit)
+  if (fn) return fn(keyword, page, limit)
+  const { searchPluginMedia } = await import('./sourceManager.js')
+  return searchPluginMedia(source, keyword, page, limit, 'album')
 }
 
 function buildPlaylistSearchResult(list, total, limit) {
@@ -1059,8 +1061,9 @@ const playlistSearchMap = {
 
 export async function searchPlaylists(keyword, source, page = 1, limit = 30) {
   const fn = playlistSearchMap[source]
-  if (!fn) throw new Error(`不支持的搜索源: ${source}`)
-  return fn(keyword, page, limit)
+  if (fn) return fn(keyword, page, limit)
+  const { searchPluginMedia } = await import('./sourceManager.js')
+  return searchPluginMedia(source, keyword, page, limit, 'sheet')
 }
 
 async function wyAlbum(id) {

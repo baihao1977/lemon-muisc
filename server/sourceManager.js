@@ -10,6 +10,16 @@ import {
   normalizeCeruSources,
   createCeruHandler,
 } from './utils/ceruSourceRuntime.js'
+import {
+  unwrapMusicFreePlugin,
+  isMusicFreePlugin,
+  normalizeMusicFreeSources,
+  createMusicFreeHandler,
+  createPluginEnv,
+  createMusicFreeModules,
+  mapMusicFreeSearchResult,
+  mapMusicFreeSearchItem,
+} from './utils/musicFreeRuntime.js'
 import { formatUserError } from './utils/userError.js'
 import { assertMusicUrl } from './utils/sourceResult.js'
 import { getSourceHealth } from './utils/sourceHealth.js'
@@ -165,6 +175,7 @@ export async function loadSource(id, script) {
     }
 
     const moduleExports = {}
+    const pluginModules = createMusicFreeModules({ pluginId: id })
     const sandbox = {
       lx: lxApi,
       cerumusic: createCerumusicApi(),
@@ -184,6 +195,11 @@ export async function loadSource(id, script) {
       queueMicrotask,
       URL,
       URLSearchParams,
+      fetch: (...args) => fetch(...args),
+      Headers,
+      AbortController,
+      Request,
+      Response,
       Buffer,
       JSON,
       Promise,
@@ -230,7 +246,9 @@ export async function loadSource(id, script) {
       decodeURI,
       escape,
       unescape,
-      require: createSandboxRequire(),
+      require: createSandboxRequire(pluginModules),
+      env: createPluginEnv(),
+      axios: pluginModules.axios,
       module: { exports: moduleExports },
       exports: moduleExports,
       process: {
@@ -256,7 +274,7 @@ export async function loadSource(id, script) {
           timeout: 15000,
           displayErrors: true,
         })
-        // 澜音原生音源：不调用 lx.send('inited')，而是 module.exports = { pluginInfo, sources, musicUrl, ... }
+        // 澜音原生 / MusicFree·Baka 插件：不调用 lx.send('inited')
         if (!settled) {
           const exported = sandbox.module?.exports
           if (isCeruNativePlugin(exported)) {
@@ -271,13 +289,35 @@ export async function loadSource(id, script) {
             }
             activeSources.set(id, entry)
             finish(null, sources)
-          } else {
-            // 落雪脚本：先登记占位，便于超时/重复加载时能清掉沙箱定时器
+            return
+          }
+          const plugin = unwrapMusicFreePlugin(exported)
+          if (isMusicFreePlugin(plugin)) {
+            sources = validateSources(normalizeMusicFreeSources(plugin))
+            if (!Object.keys(sources).length) {
+              finish(new Error('插件未声明有效平台'))
+              return
+            }
+            requestHandler = createMusicFreeHandler(plugin)
             entry = {
-              id, handler: requestHandler, sources, pendingRequests, timers, intervals, loading: true,
+              id,
+              handler: requestHandler,
+              sources,
+              pendingRequests,
+              runtime: 'musicfree',
+              plugin,
+              timers,
+              intervals,
             }
             activeSources.set(id, entry)
+            finish(null, sources)
+            return
           }
+          // 落雪脚本：先登记占位，便于超时/重复加载时能清掉沙箱定时器
+          entry = {
+            id, handler: requestHandler, sources, pendingRequests, runtime: 'lx', timers, intervals, loading: true,
+          }
+          activeSources.set(id, entry)
         }
       } catch (e) {
         finish(new Error(`音源脚本执行失败: ${e.message}`))
@@ -403,6 +443,7 @@ export function getMergedSources(allowedSourceIds = null) {
           type: info.type || 'music',
           actions: [...(info.actions || [])],
           qualitys: [...(info.qualitys || [])],
+          searchable: info.searchable === true,
         }
         continue
       }
@@ -413,9 +454,146 @@ export function getMergedSources(allowedSourceIds = null) {
       for (const q of info.qualitys || []) {
         if (!cur.qualitys.includes(q)) cur.qualitys.push(q)
       }
+      if (info.searchable) cur.searchable = true
     }
   }
   return merged
+}
+
+export function hasPluginSource(sourceKey, allowedSourceIds = null) {
+  return Boolean(findPluginEntry(sourceKey, allowedSourceIds))
+}
+
+function findPluginEntry(sourceKey, allowedSourceIds = null) {
+  const allow = Array.isArray(allowedSourceIds)
+    ? new Set(allowedSourceIds.map(String))
+    : null
+  const list = [...activeSources.values()].reverse()
+  return list.find((entry) => {
+    if (entry?.runtime !== 'musicfree' || !entry.plugin) return false
+    if (allow && !allow.has(entry.id)) return false
+    return Boolean(entry.sources?.[sourceKey])
+  }) || null
+}
+
+function rethrowPluginSearchError(err) {
+  const raw = String(err?.message || err || '').trim()
+  if (!raw) throw err
+  // 插件自身抛出的密钥提示，收成统一短文案后再抛给前端 toast
+  if (/过期|expired/i.test(raw)) {
+    const e = new Error('密钥已过期')
+    e.cause = err
+    throw e
+  }
+  if (/未填写|未配置|未提供|缺少|请.*填写|用户变量|API\s*Key|api.?key|没有.*密钥/i.test(raw)
+    && !/无效|非法|过期/.test(raw)) {
+    const e = new Error('API无密钥')
+    e.cause = err
+    throw e
+  }
+  throw err
+}
+
+/** MusicFree / BakaMusic 插件搜索（type: music | album | sheet） */
+export async function searchPluginMedia(sourceKey, keyword, page = 1, limit = 30, type = 'music', allowedSourceIds = null) {
+  const entry = findPluginEntry(sourceKey, allowedSourceIds)
+  if (!entry) throw new Error('没有可用的插件音源')
+  if (typeof entry.plugin.search !== 'function') throw new Error('该插件不支持搜索')
+  const platformName = entry.sources?.[sourceKey]?.name || entry.plugin.platform || sourceKey
+  const pageNum = Number(page) || 1
+  const kw = String(keyword || '')
+  let result
+  try {
+    result = await entry.plugin.search(kw, pageNum, type)
+  } catch (e) {
+    rethrowPluginSearchError(e)
+  }
+  if (type === 'music') {
+    const empty = !Array.isArray(result?.data) || !result.data.length
+    if (empty) {
+      try {
+        const alt = await entry.plugin.search(kw, pageNum, 'song')
+        if (Array.isArray(alt?.data) && alt.data.length) result = alt
+      } catch (e) {
+        // 主 type 已空：若备用 type 是明确的密钥错误，应抛出而不是吞掉
+        const raw = String(e?.message || '')
+        if (/密钥|API\s*Key|api.?key|过期|未填写|未配置/i.test(raw)) rethrowPluginSearchError(e)
+      }
+    }
+    return mapMusicFreeSearchResult(result, sourceKey, platformName, limit)
+  }
+  const list = Array.isArray(result?.data) ? result.data : []
+  const mapped = list.map((item) => ({
+    id: String(item.id || ''),
+    name: item.title || item.name || '',
+    artist: item.artist || item.singer || '',
+    img: item.artwork || item.cover || item.picUrl || '',
+    source: sourceKey,
+    count: item.worksNum || item.musicList?.length || 0,
+    mfItem: item,
+  })).filter((x) => x.id)
+  const isEnd = result?.isEnd !== false
+  return {
+    list: mapped,
+    allPage: isEnd ? 1 : 99,
+    total: isEnd ? mapped.length : mapped.length + Number(limit || 30),
+  }
+}
+
+export async function fetchPluginAlbum(sourceKey, albumId, allowedSourceIds = null) {
+  const entry = findPluginEntry(sourceKey, allowedSourceIds)
+  if (!entry) throw new Error('没有可用的插件音源')
+  if (typeof entry.plugin.getAlbumInfo !== 'function') throw new Error('该插件不支持专辑详情')
+  const platformName = entry.sources?.[sourceKey]?.name || entry.plugin.platform || sourceKey
+  const result = await entry.plugin.getAlbumInfo({ id: String(albumId), platform: platformName }, 1)
+  const infoSrc = result?.albumItem || {}
+  const musicList = Array.isArray(result?.musicList) ? result.musicList : []
+  return {
+    info: {
+      name: infoSrc.title || infoSrc.name || '',
+      img: infoSrc.artwork || infoSrc.img || '',
+      author: infoSrc.artist || infoSrc.author || '',
+      desc: infoSrc.description || '',
+    },
+    list: musicList.map((item) => mapMusicFreeSearchItem(item, sourceKey, platformName)).filter(Boolean),
+  }
+}
+
+export async function fetchPluginSheet(sourceKey, input, allowedSourceIds = null) {
+  const entry = findPluginEntry(sourceKey, allowedSourceIds)
+  if (!entry) throw new Error('没有可用的插件音源')
+  const platformName = entry.sources?.[sourceKey]?.name || entry.plugin.platform || sourceKey
+  const raw = String(input || '').trim()
+  let musicList = []
+  let infoSrc = { id: raw, platform: platformName }
+
+  if (/^https?:\/\//i.test(raw) && typeof entry.plugin.importMusicSheet === 'function') {
+    const imported = await entry.plugin.importMusicSheet(raw)
+    if (Array.isArray(imported)) musicList = imported
+    else if (imported && typeof imported === 'object') {
+      infoSrc = imported
+      musicList = Array.isArray(imported.musicList) ? imported.musicList : []
+    }
+  } else if (typeof entry.plugin.getMusicSheetInfo === 'function') {
+    const result = await entry.plugin.getMusicSheetInfo({ id: raw, platform: platformName }, 1)
+    infoSrc = result?.sheetItem || infoSrc
+    musicList = Array.isArray(result?.musicList) ? result.musicList : []
+  } else {
+    throw new Error('该插件不支持歌单详情')
+  }
+
+  const list = musicList.map((item) => mapMusicFreeSearchItem(item, sourceKey, platformName)).filter(Boolean)
+  return {
+    info: {
+      name: infoSrc.title || infoSrc.name || '',
+      img: infoSrc.artwork || infoSrc.coverImg || infoSrc.img || '',
+      author: infoSrc.artist || infoSrc.author || '',
+      desc: infoSrc.description || '',
+    },
+    list,
+    total: list.length,
+    hasMore: false,
+  }
 }
 
 function candidatesFor(source, action, allowedSourceIds = null, userId = null) {
@@ -665,6 +843,7 @@ function validateSources(raw) {
       type: info?.type || 'music',
       actions: (info?.actions || []).filter((a) => SUPPORTED_ACTIONS.includes(a)),
       qualitys: (info?.qualitys || []).filter((q) => SUPPORTED_QUALITYS.includes(q)),
+      searchable: info?.searchable === true,
     }
   }
   return result

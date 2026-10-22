@@ -41,7 +41,9 @@ import {
   detectPreviewClip,
   formatPreviewClipMessage,
 } from '../utils/audioDuration.js'
-import { platformLabel, PLATFORM_LABELS } from '../utils/platforms.js'
+import { platformLabel, PLATFORM_LABELS, platformLabelEpoch } from '../utils/platforms.js'
+import { searchState } from './search.js'
+import { discoverState } from './discover.js'
 import { QUALITY_LABELS, QUALITY_ORDER, getQualityLabel } from '../utils/quality.js'
 import { isPwaStandalone } from '../utils/pwa.js'
 import { logRuntime, snapshotAudioError } from '../utils/runtimeLog.js'
@@ -79,7 +81,10 @@ export const currentPlayPlatformLabel = computed(() => {
   if (!key) return ''
   if (key === 'local') return '本地'
   if (key === 'podcast') return '播客'
-  return platformLabel(key)
+  // 依赖 epoch / sources，MusicFree 的 mf* 能显示成「卍-网易云」等
+  void platformLabelEpoch.value
+  const info = searchState.sources?.[key] || discoverState.sources?.[key] || {}
+  return platformLabel(key, info)
 })
 export const currentPlayQualityLabel = computed(() => {
   const q = String(currentPlayQuality.value || '').trim()
@@ -2050,12 +2055,12 @@ function applyServerNowPlaying(data) {
     }
     if (Number(data.duration) > 1) duration.value = Number(data.duration)
     pauseLocalPlayback()
-    startDlnaProgressClock()
     if (data.paused) {
       isPaused.value = true
       freezeDlnaProgressClock()
     } else {
       isPaused.value = false
+      startDlnaProgressClock()
     }
     ensureDlnaStatusPoll()
     saveQueueState()
@@ -2197,16 +2202,6 @@ async function pollDlnaStatus() {
     if (Date.now() < dlnaIgnoreStopUntil) return
     if (!dlnaSeenPlaying) return
     if (state === 'STOPPED' || state === 'NO_MEDIA_PRESENT') {
-      const nearEnd = dur > 5 && ((rel >= dur - 4) || ((Date.now() - dlnaClockStartedAt) / 1000 >= dur - 1.2 && rel < 1.5))
-      if (nearEnd) {
-        if (!dlnaServerOwned) fireDlnaTrackEnded()
-        return
-      }
-      if (rel >= 0.8) {
-        freezeDlnaProgressClock()
-        isPaused.value = true
-        return
-      }
       if (!dlnaServerOwned) fireDlnaTrackEnded()
     }
   } catch {
@@ -2739,17 +2734,6 @@ export function initPlayer() {
   onWS('dlna:now-playing', (data) => {
     if (!data) return
     applyServerNowPlaying(data)
-  })
-  onWS('dlna:transport', (data) => {
-    if (!dlnaCastingUdn.value) return
-    if (data?.paused) {
-      isPaused.value = true
-      freezeDlnaProgressClock()
-    } else {
-      isPaused.value = false
-      resumeDlnaProgressClock()
-    }
-    syncMediaSessionPlaybackState()
   })
   onWS('dlna:queue-ended', () => {
     applyServerQueueEnded()
@@ -4454,20 +4438,10 @@ export async function togglePause() {
   if (!currentPlaying.value) return
   unlockAudioFromGesture()
   if (dlnaCastingUdn.value) {
-    try {
-      if (isPaused.value) {
-        await api.dlna.resume()
-        isPaused.value = false
-        resumeDlnaProgressClock()
-      } else {
-        await api.dlna.pause()
-        isPaused.value = true
-        freezeDlnaProgressClock()
-      }
-    } catch (e) {
-      showPlayerNotice(e?.message || '投屏控制失败', 3000)
-    }
-    pauseLocalPlayback()
+    await stopDlnaCast()
+    try { audio?.pause() } catch {}
+    endPlaybackBuffer()
+    isPaused.value = true
     syncMediaSessionPlaybackState()
     saveQueueState()
     return

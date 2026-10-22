@@ -1,3 +1,5 @@
+import { ref } from 'vue'
+
 /** 内置搜索/发现 SDK 覆盖的平台 */
 export const PLATFORM_ORDER = ['tx', 'wy', 'kw', 'kg', 'mg']
 
@@ -18,17 +20,47 @@ export const ENABLED_PLATFORMS_KEY = 'source.enabledPlatforms'
 
 const PLATFORM_KEY_RE = /^[a-z][a-z0-9_-]{0,15}$/i
 
+/** 运行时从搜索/发现源列表注入的显示名（MusicFree 的 mf******** 等） */
+const runtimePlatformLabels = Object.create(null)
+/** 变更计数，供 computed 依赖，注册后播放栏会刷新 */
+export const platformLabelEpoch = ref(0)
+
 export function isValidPlatformKey(key) {
   const k = String(key || '').trim()
   if (!k || k === 'local' || k === 'podcast') return false
   return PLATFORM_KEY_RE.test(k)
 }
 
+/**
+ * 用 /search/sources 等返回的 { key: { name } } 注册可读平台名，
+ * 避免播放栏等处只显示内部 key（如 mf53c4f95a）。
+ */
+export function registerPlatformLabels(sourcesMap) {
+  if (!sourcesMap || typeof sourcesMap !== 'object') return
+  let changed = false
+  for (const [rawKey, info] of Object.entries(sourcesMap)) {
+    const key = String(rawKey || '').trim()
+    if (!key) continue
+    const name = String(
+      (typeof info === 'string' ? info : (info?.name || info?.label || '')),
+    ).trim()
+    if (name && name !== key && runtimePlatformLabels[key] !== name) {
+      runtimePlatformLabels[key] = name
+      changed = true
+    }
+  }
+  if (changed) platformLabelEpoch.value += 1
+}
+
 /** 优先标准中文名；音源脚本 name 为 key 或空时回退 */
 export function platformLabel(key, info = {}) {
+  const k = String(key || '').trim()
+  if (!k) return ''
   const custom = String(info?.name || '').trim()
-  if (custom && custom !== key) return custom
-  return PLATFORM_LABELS[key] || String(key || '')
+  if (custom && custom !== k) return custom
+  if (PLATFORM_LABELS[k]) return PLATFORM_LABELS[k]
+  if (runtimePlatformLabels[k]) return runtimePlatformLabels[k]
+  return k
 }
 
 export function orderPlatformKeys(keys, hintOrder = []) {

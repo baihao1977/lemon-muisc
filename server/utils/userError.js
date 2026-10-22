@@ -5,6 +5,18 @@
 
 const RULES = [
   {
+    test: /密钥已过期|密钥过期|key\s*expired|token\s*expired/i,
+    message: '密钥已过期',
+  },
+  {
+    test: /API无密钥|未填写.*(?:API|api)?\s*密钥|未配置.*(?:API|api)?\s*密钥|缺少.*(?:API|api)?\s*密钥|请在插件设置.*API\s*Key|用户变量中填写|no\s*api\s*key|missing\s*api\s*key/i,
+    message: 'API无密钥',
+  },
+  {
+    test: /API\s*密钥无效|密钥无效|invalid\s*api\s*key|wrong\s*api\s*key/i,
+    message: 'API 密钥无效',
+  },
+  {
     test: /socket hang up|ECONNRESET|EPIPE|ECONNABORTED|ERR_SOCKET|ERR_CONNECTION_RESET/i,
     message: '音源服务连接中断，请稍后重试或换较低音质',
   },

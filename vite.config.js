@@ -66,5 +66,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist/public',
+    // Vite 8 默认 lightningcss 压缩在部分 scoped @keyframes 上报错
+    cssMinify: false,
   },
 })

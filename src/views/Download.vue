@@ -5,7 +5,6 @@
 
     <div class="toolbar">
       <button class="btn-ghost btn-sm" @click="loadList">刷新</button>
-      <button class="btn-ghost btn-sm" @click="openQualityUpgrade">音质升级</button>
       <button class="btn-ghost btn-sm" @click="resumeAll" :disabled="!pausableCount">全部继续</button>
       <button class="btn-ghost btn-sm" @click="pauseAll" :disabled="!activeCount">全部暂停</button>
       <button
@@ -30,15 +29,7 @@
       <button class="btn-primary btn-sm" @click="playAllPlayable" :disabled="!playableTasks.length">试听全部</button>
     </div>
 
-    <div v-if="upgradeJob || playlistJobs.length" class="paced-jobs">
-      <PlaylistPacedJobPanel
-        v-if="upgradeJob"
-        kind="upgrade"
-        :job="upgradeJob"
-        @updated="onPacedJobUpdated"
-        @cancelled="upgradeJob = null"
-        @toast="onPacedToast"
-      />
+    <div v-if="playlistJobs.length" class="paced-jobs">
       <PlaylistPacedJobPanel
         v-for="job in playlistJobs"
         :key="job.id"
@@ -244,13 +235,6 @@
       @added="onAddedToPlaylist"
     />
 
-    <QualityUpgradeDialog
-      :open="upgradeDialogOpen"
-      :default-batch-size="upgradeDefaults.batchSize"
-      :default-interval-hours="upgradeDefaults.intervalHours"
-      @cancel="upgradeDialogOpen = false"
-      @done="onUpgradeDone"
-    />
   </div>
 </template>
 
@@ -269,7 +253,6 @@ import { localCoverUrl, isFavorite, toggleFavorite } from '../stores/library.js'
 import MobileRowActions from '../components/MobileRowActions.vue'
 import CoverArt from '../components/CoverArt.vue'
 import PickPlaylistModal from '../components/PickPlaylistModal.vue'
-import QualityUpgradeDialog from '../components/QualityUpgradeDialog.vue'
 import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
 
 const tasks = ref([])
@@ -282,10 +265,7 @@ const actionsOpenId = ref('')
 const pickPlaylistTrack = ref(null)
 const tappingTaskId = ref('')
 const coverPendingPauseId = ref('')
-const upgradeDialogOpen = ref(false)
-const upgradeJob = ref(null)
 const playlistJobs = ref([])
-const upgradeDefaults = ref({ batchSize: 50, intervalHours: 24 })
 
 /** 解析任务本地文件路径（兼容 file_path / filePath / meta 残留） */
 function resolveTaskFilePath(task) {
@@ -344,13 +324,10 @@ function onAddedToPlaylist({ playlist, duplicate }) {
 
 onMounted(() => {
   loadList()
-  refreshUpgradeJob()
   refreshPlaylistJobs()
-  loadUpgradeDefaults()
 })
 onActivated(() => {
   loadList()
-  refreshUpgradeJob()
   refreshPlaylistJobs()
 })
 
@@ -445,9 +422,8 @@ unsubs.push(onWS('playlist-download:progress', (job) => {
 }))
 unsubs.push(onWS('playlist-download:done', (job) => {
   onPacedJobUpdated(job)
-  if (job?.playlistId === 'quality-upgrade') {
-    showToast('音质升级循序任务已全部入队', 'success')
-  } else if (job?.playlistName) {
+  if (job?.playlistId === 'quality-upgrade') return
+  if (job?.playlistName) {
     showToast(`歌单「${job.playlistName}」循序下载已全部入队`, 'success')
   }
 }))
@@ -1183,22 +1159,6 @@ function showToast(text, type = 'info') {
   setTimeout(() => { toast.value = null }, 3000)
 }
 
-function openQualityUpgrade() {
-  upgradeDialogOpen.value = true
-}
-
-async function loadUpgradeDefaults() {
-  try {
-    const s = await api.settings.get()
-    const batch = Number(s?.['download.playlistBatchSize'])
-    const hours = Number(s?.['download.playlistIntervalHours'])
-    upgradeDefaults.value = {
-      batchSize: [10, 20, 50, 100, 200, 300, 500, 1000].includes(batch) ? batch : 50,
-      intervalHours: [1, 3, 6, 12, 24, 48].includes(hours) ? hours : 24,
-    }
-  } catch {}
-}
-
 async function refreshPlaylistJobs() {
   try {
     const res = await api.download.listPlaylistJobs('active')
@@ -1214,10 +1174,7 @@ function onPacedToast({ text, type } = {}) {
 
 function onPacedJobUpdated(job) {
   if (!job?.id) return
-  if (job.playlistId === 'quality-upgrade') {
-    upgradeJob.value = (job.status === 'active' || job.status === 'paused') ? job : null
-    return
-  }
+  if (job.playlistId === 'quality-upgrade') return
   if (job.status !== 'active' && job.status !== 'paused') {
     playlistJobs.value = playlistJobs.value.filter((j) => j.id !== job.id)
     return
@@ -1234,41 +1191,8 @@ function onPacedJobUpdated(job) {
 
 function onPacedJobCancelled(job) {
   if (!job?.id) return
-  if (job.playlistId === 'quality-upgrade') upgradeJob.value = null
-  else playlistJobs.value = playlistJobs.value.filter((j) => j.id !== job.id)
-}
-
-async function refreshUpgradeJob() {
-  try {
-    const res = await api.library.qualityUpgradeActiveJob()
-    upgradeJob.value = res?.job || null
-  } catch {
-    upgradeJob.value = null
-  }
-}
-
-async function onUpgradeDone(payload) {
-  upgradeDialogOpen.value = false
-  upgradeJob.value = payload?.job || null
-  const matched = payload?.matchedCount || 0
-  const unmatched = payload?.unmatchedCount || 0
-  const first = Math.min(payload?.batchSize || 50, matched)
-  const unmatchedHint = unmatched ? `，未匹配 ${unmatched} 首` : ''
-  showToast(
-    `已开始音质升级：首批 ${first} 首已入队，共 ${matched} 首，每 ${payload?.intervalHours || 24} 小时一批${unmatchedHint}`,
-    'success',
-  )
-  try {
-    await api.settings.update({
-      'download.playlistBatchSize': String(payload.batchSize),
-      'download.playlistIntervalHours': String(payload.intervalHours),
-    })
-    upgradeDefaults.value = {
-      batchSize: payload.batchSize,
-      intervalHours: payload.intervalHours,
-    }
-  } catch {}
-  loadList().catch(() => {})
+  if (job.playlistId === 'quality-upgrade') return
+  playlistJobs.value = playlistJobs.value.filter((j) => j.id !== job.id)
 }
 </script>
 

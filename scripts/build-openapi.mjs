@@ -478,6 +478,8 @@ add('/podcasts/{id}/refresh', 'post', '刷新订阅', { tag: 'podcasts', paramet
 add('/dlna/devices', 'get', '搜索 DLNA 渲染器', { tag: 'dlna', parameters: [q('refresh', '1=重新 SSDP')] })
 add('/dlna/play', 'post', '投送到设备（本地、播客或在线平台曲目）。可选 queue/index/playMode，服务端持有队列并连播', { tag: 'dlna', body: {} })
 add('/dlna/status', 'get', '查询投屏播放状态（连播用）', { tag: 'dlna', parameters: [q('udn', '设备 UDN')] })
+add('/dlna/pause', 'post', '暂停当前投屏（设备端 Pause）', { tag: 'dlna', body: {} })
+add('/dlna/resume', 'post', '继续当前投屏（设备端 Play）', { tag: 'dlna', body: {} })
 add('/dlna/stop', 'post', '停止投屏并结束服务端连播会话', { tag: 'dlna', body: {} })
 add('/dlna/session', 'get', '当前用户的服务端投屏连播会话', { tag: 'dlna' })
 add('/dlna/session', 'post', '更新投屏队列或播放模式（不重新开播）', { tag: 'dlna', body: {} })

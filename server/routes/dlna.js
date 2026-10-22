@@ -12,6 +12,8 @@ import {
   getCastSession,
   markCastPlayed,
   stopCastSession,
+  pauseCastSession,
+  resumeCastSession,
   updateCastQueue,
 } from '../utils/dlnaCastSession.js'
 
@@ -78,6 +80,26 @@ dlnaRouter.get('/status', async (req, res) => {
     res.json({ ok: true, ...result, session: session.active ? session : undefined })
   } catch (e) {
     res.status(400).json({ error: e.message || '查询投屏状态失败' })
+  }
+})
+
+dlnaRouter.post('/pause', async (req, res) => {
+  try {
+    const session = await pauseCastSession(req.user.id)
+    if (!session) return res.status(404).json({ error: '当前没有投屏会话' })
+    res.json({ ok: true, ...session })
+  } catch (e) {
+    res.status(400).json({ error: e.message || '暂停失败' })
+  }
+})
+
+dlnaRouter.post('/resume', async (req, res) => {
+  try {
+    const session = await resumeCastSession(req.user.id)
+    if (!session) return res.status(404).json({ error: '当前没有投屏会话' })
+    res.json({ ok: true, ...session })
+  } catch (e) {
+    res.status(400).json({ error: e.message || '继续播放失败' })
   }
 })
 

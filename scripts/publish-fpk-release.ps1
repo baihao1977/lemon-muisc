@@ -48,8 +48,12 @@ if ($remote -notmatch "jia070310/lemon-muisc") {
   Write-Host ">>> origin is $remote" -ForegroundColor Yellow
 }
 
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 git rev-parse --verify "refs/tags/$tag" 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+$tagExists = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEap
+if ($tagExists) {
   Write-Host ">>> git tag $tag already exists"
 } else {
   git tag $tag

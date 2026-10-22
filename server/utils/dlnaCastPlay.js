@@ -127,7 +127,7 @@ export async function playTrackOnDlnaDevice(req, udn) {
     try { await warmupDlnaMp3(req) } catch {}
   }
   const uri = toAbs(req, signRel(req, rel))
-  const result = await dlnaPlay(udn, { uri, title, artist, album, mime: 'audio/mpeg' })
   const duration = parseDurationSeconds(req.body?.interval || req.body?.duration)
+  const result = await dlnaPlay(udn, { uri, title, artist, album, mime: 'audio/mpeg', duration })
   return { ...result, uri, duration }
 }

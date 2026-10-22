@@ -137,7 +137,7 @@ POST /api/v1/play/url
 | 设置 | `/settings`、`/settings/ffmpeg/*` | ffmpeg 安装为 admin |
 | 备份 | `/backup/export|import` | |
 | 关于 | `/about`、`/about/diagnostics` | 版本、FPK、运行诊断 |
-| DLNA 投屏 | `/dlna/devices` `/dlna/play` `/dlna/status` `/dlna/stop` `/dlna/session` | **连播由服务端推进**；`POST /dlna/play` 可带可选 `queue`/`index`/`playMode` |
+| DLNA 投屏 | `/dlna/devices` `/dlna/play` `/dlna/status` `/dlna/pause` `/dlna/resume` `/dlna/stop` `/dlna/session` | **连播由服务端推进**；`POST /dlna/play` 可带可选 `queue`/`index`/`playMode` |
 
 完整路径与参数见 OpenAPI。
 
@@ -157,11 +157,11 @@ ws://host:7983/ws?token=<sessionJWT>
 | `library:scan-progress` / `scan-complete` / `changed` / `removed` | 扫库 |
 | `library:mood-progress` / `mood-complete` | 情绪分析 |
 | `library:user-data-changed` | 收藏/歌单等 |
-| `dlna:now-playing` / `dlna:queue-ended` | 服务端投屏连播（页面关闭后仍切歌） |
+| `dlna:now-playing` / `dlna:transport` / `dlna:queue-ended` | 服务端投屏连播（页面关闭后仍切歌）；`transport` 同步设备端暂停/继续 |
 
 无 WS 时可轮询对应 `*-status` / `list` HTTP 接口。
 
-投屏连播由服务端持有队列：`POST /dlna/play` 可带可选 `queue` / `index` / `playMode`；`GET|POST /dlna/session` 查询或只更新队列。客户端只负责选设备、切歌、停投屏。
+投屏连播由服务端持有队列：`POST /dlna/play` 可带可选 `queue` / `index` / `playMode`；`GET|POST /dlna/session` 查询或只更新队列。设备端暂停/停止由服务端识别（曲中 STOPPED 不当作播完）。`POST /dlna/pause` / `/dlna/resume` 把控制转到音箱。
 
 ## 角色
 

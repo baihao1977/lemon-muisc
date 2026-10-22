@@ -2049,9 +2049,14 @@ function applyServerNowPlaying(data) {
       ensureLyricsForTrack(currentPlaying.value, currentPlaying.value.source, trackKey)
     }
     if (Number(data.duration) > 1) duration.value = Number(data.duration)
-    isPaused.value = false
     pauseLocalPlayback()
     startDlnaProgressClock()
+    if (data.paused) {
+      isPaused.value = true
+      freezeDlnaProgressClock()
+    } else {
+      isPaused.value = false
+    }
     ensureDlnaStatusPoll()
     saveQueueState()
     updateMediaSession()
@@ -2174,10 +2179,12 @@ async function pollDlnaStatus() {
 
     if (state === 'PAUSED_PLAYBACK') {
       freezeDlnaProgressClock()
+      isPaused.value = true
       return
     }
-    if (dlnaClockFrozen && (state === 'PLAYING' || relPlausible)) {
-      resumeDlnaProgressClock()
+    if (state === 'PLAYING' || state === 'TRANSITIONING') {
+      if (isPaused.value) isPaused.value = false
+      if (dlnaClockFrozen) resumeDlnaProgressClock()
     }
 
     if (relPlausible && !dlnaClockFrozen) {
@@ -2190,6 +2197,16 @@ async function pollDlnaStatus() {
     if (Date.now() < dlnaIgnoreStopUntil) return
     if (!dlnaSeenPlaying) return
     if (state === 'STOPPED' || state === 'NO_MEDIA_PRESENT') {
+      const nearEnd = dur > 5 && ((rel >= dur - 4) || ((Date.now() - dlnaClockStartedAt) / 1000 >= dur - 1.2 && rel < 1.5))
+      if (nearEnd) {
+        if (!dlnaServerOwned) fireDlnaTrackEnded()
+        return
+      }
+      if (rel >= 0.8) {
+        freezeDlnaProgressClock()
+        isPaused.value = true
+        return
+      }
       if (!dlnaServerOwned) fireDlnaTrackEnded()
     }
   } catch {
@@ -2722,6 +2739,17 @@ export function initPlayer() {
   onWS('dlna:now-playing', (data) => {
     if (!data) return
     applyServerNowPlaying(data)
+  })
+  onWS('dlna:transport', (data) => {
+    if (!dlnaCastingUdn.value) return
+    if (data?.paused) {
+      isPaused.value = true
+      freezeDlnaProgressClock()
+    } else {
+      isPaused.value = false
+      resumeDlnaProgressClock()
+    }
+    syncMediaSessionPlaybackState()
   })
   onWS('dlna:queue-ended', () => {
     applyServerQueueEnded()
@@ -4426,10 +4454,20 @@ export async function togglePause() {
   if (!currentPlaying.value) return
   unlockAudioFromGesture()
   if (dlnaCastingUdn.value) {
-    await stopDlnaCast()
-    try { audio?.pause() } catch {}
-    endPlaybackBuffer()
-    isPaused.value = true
+    try {
+      if (isPaused.value) {
+        await api.dlna.resume()
+        isPaused.value = false
+        resumeDlnaProgressClock()
+      } else {
+        await api.dlna.pause()
+        isPaused.value = true
+        freezeDlnaProgressClock()
+      }
+    } catch (e) {
+      showPlayerNotice(e?.message || '投屏控制失败', 3000)
+    }
+    pauseLocalPlayback()
     syncMediaSessionPlaybackState()
     saveQueueState()
     return

@@ -384,6 +384,7 @@ function applyDlnaStreamHeaders(res, mime) {
   else if (/flac/i.test(m)) pn = 'FLAC'
   else if (/wav|lpcm/i.test(m)) pn = 'LPCM'
   res.setHeader('transferMode.dlna.org', 'Streaming')
+  res.setHeader('realTimeInfo.dlna.org', 'DLNA.ORG_TLAG=*')
   res.setHeader(
     'contentFeatures.dlna.org',
     `DLNA.ORG_PN=${pn};DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000`,

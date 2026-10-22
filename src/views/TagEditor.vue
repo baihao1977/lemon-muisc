@@ -674,7 +674,7 @@
             <div class="batch-field-label">批量写入字段（与左侧设置一致，默认不改歌名）</div>
             <div class="batch-field-summary">
               {{ selectedRewriteFieldLabels || '未勾选字段，请先打开左侧设置' }}
-              <button type="button" class="btn-ghost btn-sm" @click="toggleTagSettings">改选项</button>
+              <button type="button" class="btn-ghost btn-sm" @click.stop="explainBatchFieldOptions">改选项</button>
             </div>
           </div>
           <div class="rename-on-save">
@@ -733,7 +733,7 @@
         v-if="showOrganizeMenu"
         class="organize-backdrop"
         :class="{ sheet: organizeAsSheet }"
-        @click="closeOrganizeMenu"
+        @click="onOrganizeBackdropClick"
       />
       <div
         v-if="showOrganizeMenu"
@@ -925,7 +925,7 @@ import {
   groupArtists,
 } from '../stores/library.js'
 import { deleteLibraryDiskFile } from '../utils/deleteLibraryFile.js'
-import { appConfirm, appPrompt } from '../stores/appDialog.js'
+import { appConfirm, appPrompt, appAlert } from '../stores/appDialog.js'
 import {
   loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue,
   refreshPlayingLocalMeta, currentPlaying,
@@ -1025,6 +1025,7 @@ const rewriteFieldFlags = reactive({
 /** 默认同时用已有歌手/歌名，与右侧网络获取一致，便于刮到风格 */
 const rewriteUseExistingTags = ref(true)
 const showOrganizeMenu = ref(false)
+let ignoreOrganizeOutsideUntil = 0
 const organizeAsSheet = ref(false)
 const organizeWrapRef = ref(null)
 const organizeMenuRef = ref(null)
@@ -1114,6 +1115,7 @@ function updateOrganizeMenuPosition() {
 }
 
 function onOrganizeDocClick(e) {
+  if (Date.now() < ignoreOrganizeOutsideUntil) return
   const t = e.target
   if (organizeWrapRef.value?.contains(t) || organizeMenuRef.value?.contains(t)) return
   // AppSelect 菜单 Teleport 到 body，点选项时勿关掉设置窗
@@ -1922,8 +1924,28 @@ function toggleTagSettings() {
   showOrganizeMenu.value = !showOrganizeMenu.value
 }
 
+async function explainBatchFieldOptions() {
+  await appAlert({
+    title: '批量写入字段',
+    message: '要改写入哪些字段，请点左侧「文件目录」标题栏右上角的齿轮。勾选标题、歌手、专辑、年份、风格、歌词、封面等；默认不改歌名。',
+    hint: '点「知道了」后会打开该设置。',
+    confirmText: '知道了',
+  })
+  // 弹窗「知道了」的点击会落到刚出现的遮罩上，延迟打开并忽略随后的合成 click
+  ignoreOrganizeOutsideUntil = Date.now() + 600
+  await new Promise((r) => setTimeout(r, 50))
+  showOrganizeMenu.value = true
+  await nextTick()
+  updateOrganizeMenuPosition()
+}
+
 function closeOrganizeMenu() {
   showOrganizeMenu.value = false
+}
+
+function onOrganizeBackdropClick() {
+  if (Date.now() < ignoreOrganizeOutsideUntil) return
+  closeOrganizeMenu()
 }
 
 function startOrganizeTags() {

@@ -390,10 +390,6 @@
             <div class="track-meta">
               <div class="track-name-row">
                 <span class="track-name" :title="song.name">{{ song.name }}</span>
-                <span
-                  v-if="isPlayRankSelected && song.playCount"
-                  class="track-play-count track-play-count--side"
-                >{{ song.playCount }}次</span>
               </div>
               <div class="track-sub-row">
                 <span v-if="song.isLocal" class="track-origin-badge local">本地</span>
@@ -410,7 +406,14 @@
               </div>
               <div class="track-tags">{{ formatTrackTags({ ...song, album: '' }, { audioSpec: true }) }}</div>
             </div>
+            <span v-if="isPlayRankSelected" class="track-play-count-col">
+              <span
+                v-if="song.playCount"
+                class="track-play-count track-play-count--side"
+              >{{ song.playCount }}次</span>
+            </span>
             <MobileRowActions
+              class="track-row-actions"
               :open="actionsOpenKey === song.key"
               @toggle="toggleRowActions(song.key)"
               @close="actionsOpenKey = ''"
@@ -1933,7 +1936,22 @@ function artistInitial(name) {
   line-height: 1.3;
 }
 .track-play-count--inline { display: none; }
-.track-play-count--side { margin-left: auto; }
+.track-play-count-col {
+  flex-shrink: 0;
+  min-width: 3.5em;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-right: 8px;
+}
+.track-play-count--side {
+  margin-left: 0;
+}
+/* 预留最多 5 个图标按钮的宽度，次数标签不随某行多出删除键而左右错位 */
+.track-row :deep(.mobile-row-actions) {
+  min-width: calc(5 * 34px + 4 * 4px);
+  justify-content: flex-end;
+}
 .track-sub-row {
   display: flex;
   align-items: center;
@@ -2322,7 +2340,11 @@ function artistInitial(name) {
     border-radius: 8px;
   }
   .track-name { font-size: 14px; }
+  .track-play-count-col,
   .track-play-count--side { display: none; }
+  .track-row :deep(.mobile-row-actions) {
+    min-width: 0;
+  }
   .track-play-count--inline {
     display: inline-flex;
     align-items: center;

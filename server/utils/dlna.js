@@ -212,7 +212,17 @@ function protocolInfo(mime) {
   return `http-get:*:${m}:DLNA.ORG_PN=${pn};DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000`
 }
 
-function didl({ title, artist, album, uri, mime }) {
+export function formatUpnpDuration(sec) {
+  const n = Math.max(0, Math.floor(Number(sec) || 0))
+  const h = Math.floor(n / 3600)
+  const m = Math.floor((n % 3600) / 60)
+  const s = n % 60
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+function didl({ title, artist, album, uri, mime, duration, size }) {
+  const durAttr = Number(duration) > 1 ? ` duration="${formatUpnpDuration(duration)}"` : ''
+  const sizeAttr = Number(size) > 0 ? ` size="${Math.floor(Number(size))}"` : ''
   return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
     <item id="1" parentID="0" restricted="1">
       <dc:title>${escapeXml(String(title || '音频').slice(0, 200))}</dc:title>
@@ -220,7 +230,7 @@ function didl({ title, artist, album, uri, mime }) {
       <dc:creator>${escapeXml(String(artist || '').slice(0, 200))}</dc:creator>
       <upnp:artist>${escapeXml(String(artist || '').slice(0, 200))}</upnp:artist>
       <upnp:album>${escapeXml(String(album || '').slice(0, 200))}</upnp:album>
-      <res protocolInfo="${escapeXml(protocolInfo(mime))}">${escapeXml(uri)}</res>
+      <res protocolInfo="${escapeXml(protocolInfo(mime))}"${durAttr}${sizeAttr}>${escapeXml(uri)}</res>
     </item>
   </DIDL-Lite>`
 }
@@ -241,13 +251,13 @@ async function setTransportUri(device, uri, metaInner) {
   `)
 }
 
-export async function dlnaPlay(udn, { uri, title, artist, album, mime = 'audio/mpeg' }) {
+export async function dlnaPlay(udn, { uri, title, artist, album, mime = 'audio/mpeg', duration = 0, size = 0 }) {
   const device = await ensureDlnaDevice(udn)
   if (!uri) throw new Error('缺少播放地址')
   try {
     await soap(device.controlURL, 'Stop', '<InstanceID>0</InstanceID>')
   } catch {}
-  const xml = didl({ title, artist, album, uri, mime })
+  const xml = didl({ title, artist, album, uri, mime, duration, size })
   const attempts = [
     () => setTransportUri(device, uri, escapeXml(xml)),
     () => setTransportUri(device, uri, `<![CDATA[${xml}]]>`),
@@ -270,6 +280,18 @@ export async function dlnaPlay(udn, { uri, title, artist, album, mime = 'audio/m
     throw new Error(friendlyDlnaError(e.message))
   }
   return { ok: true, udn: device.udn, name: device.name }
+}
+
+export async function dlnaPause(udn) {
+  const device = await ensureDlnaDevice(udn)
+  await soap(device.controlURL, 'Pause', '<InstanceID>0</InstanceID>')
+  return { ok: true, udn: device.udn }
+}
+
+export async function dlnaResume(udn) {
+  const device = await ensureDlnaDevice(udn)
+  await soap(device.controlURL, 'Play', '<InstanceID>0</InstanceID><Speed>1</Speed>')
+  return { ok: true, udn: device.udn }
 }
 
 export async function dlnaStop(udn) {

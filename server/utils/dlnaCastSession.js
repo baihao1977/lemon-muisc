@@ -1,4 +1,4 @@
-import { dlnaGetStatus, dlnaStop, pinDlnaDevice, unpinDlnaDevice } from './dlna.js'
+import { dlnaGetStatus, dlnaStop, dlnaPause, dlnaResume, pinDlnaDevice, unpinDlnaDevice } from './dlna.js'
 import { broadcast } from '../ws.js'
 import {
   captureDlnaHttpContext,
@@ -79,6 +79,7 @@ function publicSession(s, extra = {}) {
     playMode: s.playMode,
     quality: s.quality,
     duration: s.durationSec || 0,
+    paused: Boolean(s.paused),
     item: entry?.item || null,
     source: entry?.source || '',
     key: trackKeyOf(entry),
@@ -187,6 +188,41 @@ async function advanceSession(s) {
   }
 }
 
+function sessionElapsed(s, now) {
+  if (s.paused) return Number(s.clockFrozenElapsed) || 0
+  return Math.max(0, (now - s.startedAt) / 1000)
+}
+
+function playbackLooksFinished(s, rel, now) {
+  const dur = Number(s.durationSec) || 0
+  const elapsed = sessionElapsed(s, now)
+  const nearEndByRel = dur > 5 && rel >= dur - 4
+  const nearEndByClock = dur > 5 && elapsed >= dur - 1.2
+  return nearEndByRel || (rel < 1.5 && nearEndByClock)
+}
+
+function enterPaused(s, now, state = 'PAUSED_PLAYBACK') {
+  if (s.paused) return
+  s.clockFrozenElapsed = sessionElapsed(s, now)
+  s.paused = true
+  notify(s, 'dlna:transport', { paused: true, state })
+}
+
+function exitPaused(s, now) {
+  if (!s.paused) return
+  s.startedAt = now - (Number(s.clockFrozenElapsed) || 0) * 1000
+  s.paused = false
+  notify(s, 'dlna:transport', { paused: false, state: 'PLAYING' })
+}
+
+async function endSessionFromDevice(s) {
+  if (!isLiveSession(s)) return
+  sessions.delete(sessionKey(s.userId))
+  stopTickerIfIdle()
+  unpinDlnaDevice(s.udn)
+  notify(s, 'dlna:queue-ended', { active: false, reason: 'device-stop' })
+}
+
 async function tickSession(s) {
   if (!isLiveSession(s) || s.advancing) return
   const now = Date.now()
@@ -201,22 +237,28 @@ async function tickSession(s) {
     if (rel > 0.4) s.seenPlaying = true
 
     if (state === 'PAUSED_PLAYBACK') {
-      if (!s.paused) {
-        s.clockFrozenElapsed = Math.max(0, (now - s.startedAt) / 1000)
-        s.paused = true
-      }
+      enterPaused(s, now, state)
       return
     }
-    if (s.paused && (state === 'PLAYING' || rel > 0.4)) {
-      s.startedAt = now - s.clockFrozenElapsed * 1000
-      s.paused = false
+
+    if (state === 'PLAYING' || state === 'TRANSITIONING') {
+      exitPaused(s, now)
+      return
     }
 
     if (now < s.ignoreStopUntil) return
     if (!s.seenPlaying) return
     if (state === 'STOPPED' || state === 'NO_MEDIA_PRESENT') {
-      await advanceSession(s)
-      return
+      if (playbackLooksFinished(s, rel, now)) {
+        await advanceSession(s)
+        return
+      }
+      // 进度还在曲中：设备暂停常报 STOPPED，勿切下一首
+      if (rel >= 0.8) {
+        enterPaused(s, now, state)
+        return
+      }
+      await endSessionFromDevice(s)
     }
   } catch {
     /* 部分音箱不报状态，用曲长墙钟切歌 */
@@ -226,7 +268,7 @@ async function tickSession(s) {
   if (now < s.ignoreStopUntil) return
   const dur = Number(s.durationSec) || 0
   if (dur > 3) {
-    const elapsed = (now - s.startedAt) / 1000
+    const elapsed = sessionElapsed(s, now)
     if (elapsed >= dur + 1.5) await advanceSession(s)
   }
 }
@@ -326,6 +368,23 @@ export function markCastPlayed(userId, durationSec = 0) {
     const item = s.queue[s.index]?.item
     s.durationSec = parseDurationSeconds(item?.interval || item?.duration)
   }
+}
+
+export async function pauseCastSession(userId) {
+  const s = sessions.get(sessionKey(userId))
+  if (!s) return null
+  try { await dlnaPause(s.udn) } catch {}
+  enterPaused(s, Date.now(), 'PAUSED_PLAYBACK')
+  return publicSession(s)
+}
+
+export async function resumeCastSession(userId) {
+  const s = sessions.get(sessionKey(userId))
+  if (!s) return null
+  await dlnaResume(s.udn)
+  exitPaused(s, Date.now())
+  s.seenPlaying = true
+  return publicSession(s)
 }
 
 export async function stopCastSession(userId, { stopDevice = true } = {}) {

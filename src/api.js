@@ -376,6 +376,8 @@ export const api = {
   dlna: {
     devices: (refresh = false) => request(`/dlna/devices${refresh ? '?refresh=1' : ''}`, { timeout: 15000 }),
     play: (body) => request('/dlna/play', { method: 'POST', body, timeout: 90000 }),
+    pause: () => request('/dlna/pause', { method: 'POST' }),
+    resume: () => request('/dlna/resume', { method: 'POST' }),
     stop: (udn) => request('/dlna/stop', { method: 'POST', body: { udn } }),
     status: (udn) => request(`/dlna/status?udn=${encodeURIComponent(udn)}`, { timeout: 8000 }),
     session: (body) => request('/dlna/session', { method: 'POST', body, timeout: 20000 }),

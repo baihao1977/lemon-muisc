@@ -2,9 +2,10 @@
   <div class="file-manager-page" :class="{ 'fm-embed-tag': activeTab === 'tag' }">
     <div class="fm-head">
       <h2>文件管理</h2>
-      <p class="fm-desc">管理本地音乐文件：编辑标签、清理重复/小文件、检测伪 FLAC，或按歌手整理迁移音乐库</p>
+      <p class="fm-desc">管理本地音乐文件：编辑标签、清理重复/小文件、检测伪 FLAC、按歌手整理，或升级曲库音质</p>
     </div>
 
+    <div class="fm-shell">
     <div class="fm-tabs">
       <button
         type="button"
@@ -38,8 +39,17 @@
       >
         整理
       </button>
+      <button
+        type="button"
+        class="fm-tab"
+        :class="{ active: activeTab === 'upgrade' }"
+        @click="setTab('upgrade')"
+      >
+        音质升级
+      </button>
     </div>
 
+    <div class="fm-shell-body">
     <div v-show="activeTab === 'tag'" class="fm-tag-host">
       <p v-if="tagEmbedError" class="fm-empty">标签编辑加载失败：{{ tagEmbedError }}</p>
       <TagEditor v-else-if="tagVisited" embedded />
@@ -563,24 +573,59 @@
         </div>
       </div>
     </section>
+
+    <!-- ============ 音质升级 ============ -->
+    <section v-if="activeTab === 'upgrade'" class="fm-panel">
+      <div class="fm-panel-toolbar">
+        <button type="button" class="btn-primary btn-sm" @click="upgradeDialogOpen = true">
+          扫描并升级
+        </button>
+      </div>
+      <p class="fm-tip">扫描音乐库里可换成更高音质的曲目，下载后覆盖原文件。入队进度在本页查看，具体下载任务仍在「下载」页。</p>
+      <PlaylistPacedJobPanel
+        v-if="upgradeJob"
+        kind="upgrade"
+        :job="upgradeJob"
+        @updated="onUpgradeJobUpdated"
+        @cancelled="upgradeJob = null"
+        @toast="onUpgradeToast"
+      />
+      <div v-else class="fm-empty">
+        <p>{{ upgradeJobLoaded ? '当前没有进行中的音质升级任务' : '正在读取任务…' }}</p>
+      </div>
+    </section>
+    </div>
+    </div>
+
+    <QualityUpgradeDialog
+      :open="upgradeDialogOpen"
+      :default-batch-size="upgradeDefaults.batchSize"
+      :default-interval-hours="upgradeDefaults.intervalHours"
+      @cancel="upgradeDialogOpen = false"
+      @done="onUpgradeDone"
+    />
+    <div v-if="fmToast" class="fm-toast" :class="fmToast.type">{{ fmToast.text }}</div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onErrorCaptured } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onActivated, onErrorCaptured } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api.js'
+import { onWS } from '../ws.js'
 import { appConfirm, appPrompt } from '../stores/appDialog.js'
 import { reloadLibraryTracksFromServer } from '../stores/library.js'
 import AppSelect from '../components/AppSelect.vue'
 import TagEditor from './TagEditor.vue'
+import QualityUpgradeDialog from '../components/QualityUpgradeDialog.vue'
+import PlaylistPacedJobPanel from '../components/PlaylistPacedJobPanel.vue'
 
 defineOptions({ name: 'FileManager' })
 
 const route = useRoute()
 const router = useRouter()
 
-const TAB_IDS = ['tag', 'clean', 'fake-flac', 'organize']
+const TAB_IDS = ['tag', 'clean', 'fake-flac', 'organize', 'upgrade']
 
 function normalizeTab(raw) {
   const t = String(raw || '').trim()
@@ -621,6 +666,7 @@ watch(activeTab, (tab) => {
   if (tab === 'organize' && !orgRootDirs.value.length) {
     loadOrgDirs()
   }
+  if (tab === 'upgrade') refreshUpgradeJob()
 })
 
 watch(
@@ -635,6 +681,92 @@ watch(
 onMounted(() => {
   if (activeTab.value === 'tag') tagVisited.value = true
   if (!route.query.tab) syncTabToRoute(activeTab.value)
+  loadUpgradeDefaults()
+  refreshUpgradeJob()
+})
+onActivated(() => {
+  if (activeTab.value === 'upgrade') refreshUpgradeJob()
+})
+
+const upgradeDialogOpen = ref(false)
+const upgradeJob = ref(null)
+const upgradeJobLoaded = ref(false)
+const upgradeDefaults = ref({ batchSize: 50, intervalHours: 24 })
+const fmToast = ref(null)
+const upgradeUnsubs = []
+
+function showFmToast(text, type = 'info') {
+  fmToast.value = { text, type }
+  setTimeout(() => { fmToast.value = null }, 3000)
+}
+
+function onUpgradeToast({ text, type } = {}) {
+  if (text) showFmToast(text, type || 'info')
+}
+
+function onUpgradeJobUpdated(job) {
+  if (job?.playlistId !== 'quality-upgrade') return
+  upgradeJob.value = (job.status === 'active' || job.status === 'paused') ? job : null
+}
+
+async function loadUpgradeDefaults() {
+  try {
+    const s = await api.settings.get()
+    const batch = Number(s?.['download.playlistBatchSize'])
+    const hours = Number(s?.['download.playlistIntervalHours'])
+    upgradeDefaults.value = {
+      batchSize: [10, 20, 50, 100, 200, 300, 500, 1000].includes(batch) ? batch : 50,
+      intervalHours: [1, 3, 6, 12, 24, 48].includes(hours) ? hours : 24,
+    }
+  } catch {}
+}
+
+async function refreshUpgradeJob() {
+  try {
+    const res = await api.library.qualityUpgradeActiveJob()
+    upgradeJob.value = res?.job || null
+  } catch {
+    upgradeJob.value = null
+  } finally {
+    upgradeJobLoaded.value = true
+  }
+}
+
+async function onUpgradeDone(payload) {
+  upgradeDialogOpen.value = false
+  upgradeJob.value = payload?.job || null
+  const matched = payload?.matchedCount || 0
+  const unmatched = payload?.unmatchedCount || 0
+  const first = Math.min(payload?.batchSize || 50, matched)
+  const unmatchedHint = unmatched ? `，未匹配 ${unmatched} 首` : ''
+  showFmToast(
+    `已开始音质升级：首批 ${first} 首已入队，共 ${matched} 首，每 ${payload?.intervalHours || 24} 小时一批${unmatchedHint}`,
+    'success',
+  )
+  try {
+    await api.settings.update({
+      'download.playlistBatchSize': String(payload.batchSize),
+      'download.playlistIntervalHours': String(payload.intervalHours),
+    })
+    upgradeDefaults.value = {
+      batchSize: payload.batchSize,
+      intervalHours: payload.intervalHours,
+    }
+  } catch {}
+}
+
+upgradeUnsubs.push(onWS('playlist-download:progress', (job) => {
+  onUpgradeJobUpdated(job)
+}))
+upgradeUnsubs.push(onWS('playlist-download:done', (job) => {
+  onUpgradeJobUpdated(job)
+  if (job?.playlistId === 'quality-upgrade') showFmToast('音质升级循序任务已全部入队', 'success')
+}))
+upgradeUnsubs.push(onWS('playlist-download:cancelled', (job) => {
+  if (job?.playlistId === 'quality-upgrade') upgradeJob.value = null
+}))
+onUnmounted(() => {
+  upgradeUnsubs.forEach((fn) => fn())
 })
 
 /* ---------- 清理：重复曲目 / 小文件 ---------- */
@@ -1391,9 +1523,25 @@ async function startOrganize() {
   padding-bottom: 0;
   overflow: hidden;
 }
-.file-manager-page.fm-embed-tag > .fm-head,
-.file-manager-page.fm-embed-tag > .fm-tabs {
+.file-manager-page.fm-embed-tag > .fm-head {
   flex-shrink: 0;
+}
+.file-manager-page.fm-embed-tag > .fm-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.file-manager-page.fm-embed-tag > .fm-shell > .fm-tabs {
+  flex-shrink: 0;
+}
+.file-manager-page.fm-embed-tag .fm-shell-body {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .fm-tag-host {
   flex: 1 1 0;
@@ -1423,6 +1571,19 @@ async function startOrganize() {
     overflow-y: visible;
     display: block;
     padding-bottom: 24px;
+  }
+  .file-manager-page.fm-embed-tag > .fm-shell {
+    flex: none;
+    height: auto;
+    display: block;
+    overflow: visible;
+  }
+  .file-manager-page.fm-embed-tag .fm-shell-body {
+    flex: none;
+    height: auto;
+    overflow: visible;
+    padding: 12px 14px 16px;
+    display: block;
   }
   .fm-tag-host {
     flex: none;
@@ -1465,34 +1626,51 @@ async function startOrganize() {
   color: var(--text-muted);
   font-size: 13px;
 }
+.fm-shell {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
+  overflow: hidden;
+  min-width: 0;
+}
+.fm-shell-body {
+  padding: 16px 18px 20px;
+  background: var(--bg-card);
+  min-width: 0;
+}
 .fm-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 18px;
+  gap: 4px 6px;
+  margin: 0;
+  padding: 8px 10px 0;
   max-width: 100%;
   min-width: 0;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border);
 }
 .fm-tab {
   border: none;
   background: transparent;
-  padding: 9px 14px;
-  font-size: 14px;
+  padding: 8px 16px;
+  font-size: 13px;
   color: var(--text-muted);
   cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-radius: 10px 10px 0 0;
   flex: 0 1 auto;
   white-space: nowrap;
+  line-height: 1.3;
 }
 .fm-tab:hover {
   color: var(--text);
+  background: color-mix(in srgb, var(--bg-card) 55%, transparent);
 }
 .fm-tab.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: var(--text);
+  background: var(--bg-card);
   font-weight: 600;
+  margin-bottom: -1px;
+  padding-bottom: 9px;
 }
 .clean-subtabs {
   display: inline-flex;
@@ -1568,6 +1746,25 @@ async function startOrganize() {
   gap: 8px;
   margin-left: auto;
 }
+.fm-tip {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.fm-toast {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  z-index: 1000;
+  box-shadow: var(--shadow);
+}
+.fm-toast.success { background: var(--success); color: #fff; }
+.fm-toast.error { background: var(--error); color: #fff; }
+.fm-toast.info { background: var(--bg-card); border: 1px solid var(--border); }
 .fm-empty {
   padding: 32px 0;
   color: var(--text-muted);

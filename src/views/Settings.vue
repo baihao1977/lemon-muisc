@@ -1,17 +1,22 @@
 <template>
   <div ref="settingsPageRef" class="settings-page">
-    <aside ref="settingsNavRef" class="settings-nav">
-      <h2 class="nav-title">设置</h2>
-      <p class="nav-sub">按使用场景整理的偏好设置</p>
+    <div class="settings-head">
+      <h2>设置</h2>
+      <p class="settings-desc">按使用场景整理的偏好设置</p>
+    </div>
+    <div class="settings-shell">
+    <div ref="settingsNavRef" class="settings-tabs">
       <button
-        v-for="tab in tabs" :key="tab.id"
-        :class="['nav-tab', { active: activeTab === tab.id }]"
+        v-for="tab in tabs"
+        :key="tab.id"
+        type="button"
+        class="settings-tab"
+        :class="{ active: activeTab === tab.id }"
         @click="activeTab = tab.id"
       >{{ tab.label }}</button>
-    </aside>
+    </div>
 
-    <main ref="settingsPanelRef" class="settings-panel card">
-      <h3 class="panel-title">{{ currentTab.label }}</h3>
+    <main ref="settingsPanelRef" class="settings-panel">
 
       <!-- 账号管理 -->
       <div v-if="activeTab === 'account'" class="panel-body account-panel-body">
@@ -1313,6 +1318,7 @@
         </template>
       </div>
     </main>
+    </div>
 
     <div v-if="toast" class="toast" :class="toast.type">{{ toast.text }}</div>
 
@@ -1920,8 +1926,6 @@ const lrcToggleItems = [
   { key: 'download.isDownloadRLrc', label: '下载罗马音歌词', desc: '写入 .lrc 时附带罗马音' },
 ]
 
-const currentTab = computed(() => tabs.value.find(t => t.id === activeTab.value) || tabs.value[0])
-
 function resolveSettingsTab(id) {
   const aliases = { users: 'account', mail: 'account', embed: 'download', lrc: 'download' }
   const mapped = aliases[id] || id
@@ -1967,6 +1971,7 @@ watch(tabs, (list) => {
 }, { immediate: true })
 
 watch(activeTab, async (tab) => {
+  settingsPanelRef.value?.scrollTo?.({ top: 0, left: 0 })
   closeSourcePlatformPanel()
   if (tab === 'paths' && musicPaths.value.length) {
     loadLibraryStats()
@@ -3796,66 +3801,88 @@ function showToast(text, type = 'info') {
 <style scoped>
 .settings-page {
   display: flex;
-  gap: 24px;
+  flex-direction: column;
+  gap: 0;
   width: 100%;
   max-width: none;
   height: 100%;
   min-height: 0;
-  align-items: stretch;
   overflow: hidden;
 }
 
-.settings-nav {
-  width: 200px;
+.settings-head {
   flex-shrink: 0;
-  align-self: flex-start;
-  max-height: 100%;
-  overflow-y: auto;
+  margin-bottom: 16px;
 }
-.nav-title { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
-.nav-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.5; }
+.settings-head h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+.settings-desc {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
 
-.nav-tab {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 9px 12px;
-  border-radius: var(--radius);
+.settings-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 0;
+  padding: 8px 10px 0;
+  max-width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border);
+}
+.settings-tab {
+  border: none;
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 14px;
-  margin-bottom: 2px;
-  position: relative;
-  transition: all 0.15s;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 10px 10px 0 0;
+  flex: 0 1 auto;
+  white-space: nowrap;
+  line-height: 1.3;
 }
-.nav-tab:hover { background: var(--bg-hover); color: var(--text); }
-.nav-tab.active {
-  background: var(--accent-muted);
-  color: var(--accent);
-  font-weight: 500;
+.settings-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-card) 55%, transparent);
 }
-.nav-tab.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 18px;
-  background: var(--accent);
-  border-radius: 0 2px 2px 0;
+.settings-tab.active {
+  color: var(--text);
+  background: var(--bg-card);
+  font-weight: 600;
+  margin-bottom: -1px;
+  padding-bottom: 9px;
 }
 
 .settings-panel {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  padding: 24px 28px;
+  padding: 16px 18px 24px;
   width: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
+  background: var(--bg-card);
 }
-.panel-title { font-size: 18px; font-weight: 600; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-light); }
 .panel-body { display: flex; flex-direction: column; gap: 16px; }
 
 .paths-panel-body { gap: 18px; }
@@ -4854,41 +4881,24 @@ function showToast(text, type = 'info') {
 
 @media (max-width: 768px) {
   .settings-page {
-    flex-direction: column;
-    gap: 12px;
     height: auto;
     min-height: calc(100vh - 160px);
     overflow: visible;
   }
-  .settings-nav {
-    width: 100%;
-    max-height: none;
-    overflow: visible;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 12px 14px;
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    background: var(--bg);
+  .settings-head h2 { font-size: 18px; }
+  .settings-shell {
+    flex: none;
+  }
+  .settings-tab {
+    padding: 8px 12px;
+    font-size: 13px;
+    border-radius: 9px 9px 0 0;
   }
   .settings-panel {
     overflow: visible;
+    padding: 14px 14px 18px;
   }
-  .nav-title { width: 100%; font-size: 18px; margin-bottom: 0; }
-  .nav-sub { width: 100%; margin-bottom: 4px; }
-  .nav-tab {
-    width: auto;
-    display: inline-block;
-    padding: 7px 12px;
-    font-size: 13px;
-    margin-bottom: 0;
-  }
-  .nav-tab.active::before { display: none; }
-  .settings-panel { padding: 16px; }
   .color-scheme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .panel-title { font-size: 16px; margin-bottom: 14px; padding-bottom: 12px; }
   .setting-item {
     flex-direction: column;
     align-items: flex-start;

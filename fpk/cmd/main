@@ -116,10 +116,12 @@ start_service() {
     return 1
   fi
 
-  if [ ! -d "${root}/node_modules/express" ] || [ ! -d "${root}/node_modules/nodemailer" ]; then
+  if [ ! -d "${root}/node_modules/express" ] || [ ! -d "${root}/node_modules/nodemailer" ] \
+    || [ ! -d "${root}/node_modules/axios" ] || [ ! -d "${root}/node_modules/cheerio" ]; then
     attach_persist_modules || true
   fi
-  if [ ! -d "${root}/node_modules/express" ] || [ ! -d "${root}/node_modules/nodemailer" ]; then
+  if [ ! -d "${root}/node_modules/express" ] || [ ! -d "${root}/node_modules/nodemailer" ] \
+    || [ ! -d "${root}/node_modules/axios" ] || [ ! -d "${root}/node_modules/cheerio" ]; then
     echo "正在补装依赖（首次启用或依赖有更新，可能需几分钟）…" > "${TRIM_TEMP_LOGFILE}"
     install_node_modules || true
   fi
@@ -131,6 +133,15 @@ start_service() {
   if [ ! -d "${root}/node_modules/nodemailer" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] warn: nodemailer 缺失，邮件功能暂不可用，尝试补装…" >> "${APP_LOG}" 2>/dev/null || true
     install_node_modules || true
+  fi
+  # axios/cheerio：MusicFree 音源运行时，启动必装（缺则 ERR_MODULE_NOT_FOUND）
+  if [ ! -d "${root}/node_modules/axios" ] || [ ! -d "${root}/node_modules/cheerio" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] warn: axios/cheerio 缺失，尝试补装…" >> "${APP_LOG}" 2>/dev/null || true
+    install_node_modules || true
+  fi
+  if [ ! -d "${root}/node_modules/axios" ] || [ ! -d "${root}/node_modules/cheerio" ]; then
+    echo "依赖未完整（缺少 axios/cheerio）。请查看 ${TRIM_PKGVAR}/log/npm-install.log ，确认 NAS 可访问 registry.npmmirror.com 后重试启用。" > "${TRIM_TEMP_LOGFILE}"
+    return 1
   fi
 
   if ! ensure_better_sqlite3_native; then

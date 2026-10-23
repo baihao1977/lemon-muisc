@@ -553,13 +553,25 @@ install_node_modules() {
 
   if [ "${has_core}" = "1" ]; then
     attach_persist_modules || true
-    if [ ! -f "${stamp}" ] || [ "$(cat "${stamp}" 2>/dev/null)" = "${fp}" ]; then
+    # MusicFree 运行时依赖：旧版持久 node_modules 可能缺 axios/cheerio，不能仅凭 stamp 跳过
+    local has_mf_deps=0
+    if [ -d "${root}/node_modules/axios" ] && [ -d "${root}/node_modules/cheerio" ]; then
+      has_mf_deps=1
+    elif [ -d "${persist}/axios" ] && [ -d "${persist}/cheerio" ]; then
+      has_mf_deps=1
+    fi
+    if [ "${has_mf_deps}" = "1" ] && { [ ! -f "${stamp}" ] || [ "$(cat "${stamp}" 2>/dev/null)" = "${fp}" ]; }; then
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] node_modules 已就绪（rev=${fp}），跳过 npm install" >> "${log_file}"
       echo "${fp}" > "${stamp}" 2>/dev/null || true
       update_npm_ui "依赖已就绪，跳过 npm 安装"
       return 0
     fi
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] deps.rev 变更（$(cat "${stamp}" 2>/dev/null) → ${fp}），增量 npm install…" >> "${log_file}"
+    if [ "${has_mf_deps}" = "0" ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 缺少 axios/cheerio，增量 npm install…" >> "${log_file}"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] deps.rev 变更（$(cat "${stamp}" 2>/dev/null) → ${fp}），增量 npm install…" >> "${log_file}"
+    fi
+
     update_npm_ui "依赖有更新，正在增量安装（不删除已有模块）…"
     npm_bin="$(resolve_npm_bin)" || return 1
     prepend_store_node_path || true

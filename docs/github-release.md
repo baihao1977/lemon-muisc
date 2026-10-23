@@ -1,14 +1,10 @@
-# 柠檬音乐 v1.2.17.15
+# 柠檬音乐 v1.2.17.16
 
 ## 更新内容
 
-- **音源**：支持导入 MusicFree / BakaMusic 插件（保留落雪、澜音）；可批量启用 / 停用 / 删除
-- **音源**：万象等插件正确显示平台名；密钥过期或未填写时给出明确提示
-- **设置**：修复「停用」按钮点了没反应；导入音源显示已等待秒数
-- **播放栏**：长平台名简写（如「星海音乐源-汽水」→「汽水」），并保留音质显示
-- **酷狗**：修复分享歌单（含 `no_show_gid`）仅解析前 10 首的问题，完整拉取列表（感谢 [@CrescentRuby](https://github.com/CrescentRuby)）
+- **飞牛 / FPK**：修复升级到 1.2.17.15 后无法启用（`ERR_MODULE_NOT_FOUND`）——新增 MusicFree 依赖 `axios` / `cheerio` 后未触发 npm 补装；本次递增 `deps.rev`，启用时检测并补齐缺失模块
 
 ## 安装 / 更新
 
-- x86：`lemon-music-1.2.17.15-x86.fpk`
-- ARM：`lemon-music-1.2.17.15-arm.fpk`
+- x86：`lemon-music-1.2.17.16-x86.fpk`
+- ARM：`lemon-music-1.2.17.16-arm.fpk`

@@ -573,6 +573,7 @@ import {
 import { openTagEditTrack } from '../utils/tagEdit.js'
 import { isMobileUiContext } from '../utils/device.js'
 import { api } from '../api.js'
+import { canUseDownload } from '../utils/auth.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
 import { getQualityDisplay, getQualityLabel } from '../utils/quality.js'
@@ -637,6 +638,7 @@ const isCurrentFavorite = computed(() => currentPlaying.value ? isFavorite({
 const currentLocalPath = currentLocalTrackPath
 
 const canDownloadCurrent = computed(() => {
+  if (!canUseDownload.value) return false
   const t = currentPlaying.value
   if (!t) return false
   if (currentLocalPath.value) return false

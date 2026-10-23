@@ -499,6 +499,7 @@ import PickPlaylistModal from './PickPlaylistModal.vue'
 import LyricPickModal from './LyricPickModal.vue'
 import { getTrackFilePath } from '../utils/trackPath.js'
 import { api } from '../api.js'
+import { canUseDownload } from '../utils/auth.js'
 import { assertActiveSourceForDownload } from '../stores/downloadGuard.js'
 import { buildDownloadTask, getItemQualities } from '../utils/musicPayload.js'
 import { getQualityDisplay, getQualityLabel } from '../utils/quality.js'
@@ -785,6 +786,7 @@ const volumePercent = computed(() => Math.round((volume.value || 0) * 100))
 const currentLocalPath = currentLocalTrackPath
 
 const canDownloadCurrent = computed(() => {
+  if (!canUseDownload.value) return false
   const t = currentPlaying.value
   if (!t) return false
   if (currentLocalPath.value) return false

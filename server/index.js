@@ -196,6 +196,12 @@ server.listen(PORT, '::', () => {
       .then(({ startDiscoverFeedWarm }) => startDiscoverFeedWarm())
       .catch(() => {})
   }, 3000).unref?.()
+  // 启动后检查 GitHub 新版本；有更新则自动备份音源/歌单等到下载目录
+  setTimeout(() => {
+    import('./utils/autoUserBackup.js')
+      .then(({ runAutoBackupVersionCheck }) => runAutoBackupVersionCheck())
+      .catch(() => {})
+  }, 8000).unref?.()
   // 启动后补跑未分析情绪（仅新/未完成文件）
   setTimeout(() => {
     import('./utils/moodAnalyzeJob.js')

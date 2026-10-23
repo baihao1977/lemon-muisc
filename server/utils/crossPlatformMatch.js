@@ -73,7 +73,8 @@ function searchKeywords(name, artist) {
 }
 
 /**
- * 在指定平台搜最匹配的一首；分数不足则返回 null
+ * 在指定平台搜最匹配的一首；分数不足则返回 null。
+ * allowedSourceIds：限定只用这些插件音源（用于「先当前源、再其它源」）。
  */
 export async function findCrossPlatformMatch({
   name,
@@ -81,6 +82,7 @@ export async function findCrossPlatformMatch({
   artist,
   platform,
   limit = 12,
+  allowedSourceIds = null,
 } = {}) {
   const plat = String(platform || '').trim()
   if (!plat || plat === 'local') return null
@@ -88,11 +90,15 @@ export async function findCrossPlatformMatch({
   const art = String(singer || artist || '').trim()
   if (!title) return null
 
+  const searchOpts = Array.isArray(allowedSourceIds) && allowedSourceIds.length
+    ? { allowedSourceIds: allowedSourceIds.map(String).filter(Boolean) }
+    : {}
+
   let best = null
   let bestScore = 0
   for (const keyword of searchKeywords(title, art)) {
     try {
-      const result = await searchMusic(keyword, plat, 1, Math.max(8, limit))
+      const result = await searchMusic(keyword, plat, 1, Math.max(8, limit), searchOpts)
       for (const row of result?.list || []) {
         const score = trackNameArtistScore(row, title, art)
         if (score > bestScore) {

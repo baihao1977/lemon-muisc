@@ -5,6 +5,7 @@ import {
   initAuth,
   isSessionValid,
   currentUser,
+  canUseDownload,
 } from './utils/auth.js'
 import { finishRouteLoading, getRouteLoadingToken, startRouteLoading } from './stores/navigation.js'
 import Login from './views/Login.vue'

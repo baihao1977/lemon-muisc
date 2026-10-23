@@ -30,6 +30,14 @@ export const isAuthenticated = computed(() => Boolean(token.value))
 export const isSessionValid = computed(() => sessionValidated.value)
 export const currentUser = computed(() => user.value)
 export const isAdmin = computed(() => user.value?.role === 'admin')
+/** 是否允许使用下载功能（管理员始终 true；普通用户看 allowDownload） */
+export const canUseDownload = computed(() => {
+  const u = user.value
+  if (!u) return false
+  if (u.role === 'admin') return true
+  if (u.allowDownload === false || u.downloadAllowed === false) return false
+  return true
+})
 export const needsSetup = computed(() => setupRequired.value)
 export const isAuthReady = computed(() => authReady.value)
 

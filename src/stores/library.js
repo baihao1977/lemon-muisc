@@ -1320,6 +1320,27 @@ export function getPlayRankEntries(range = 'week') {
   return rows
 }
 
+/** 听歌排行行 → 展示曲目：优先库内本地曲，并保证 isLocal 正确（避免本地曲误标「网络」） */
+export function resolvePlayRankTrack(row, allTracks = libraryTracks.value) {
+  if (!row) return null
+  const library = Array.isArray(allTracks) ? allTracks : []
+  const byKey = resolveTracksByKeys([row.key], library, [row])[0]
+  if (byKey) {
+    return { ...byKey, key: row.key, playCount: row.playCount }
+  }
+  let base = snapshotToPlayTrack(row) || row
+  if (!isLocalPlaylistTrack(base) && library.length) {
+    const local = findLocalMatchForTrack(base, library)
+    if (local) {
+      base = { ...enrichLocalCover(local), isLocal: true }
+    }
+  }
+  if (base.isLocal == null) {
+    base = { ...base, isLocal: isLocalPlaylistTrack(base) }
+  }
+  return { ...base, key: row.key, playCount: row.playCount }
+}
+
 /** 听歌排行计数：由播放器在实际听满约 20 秒后调用（短播不计） */
 export function recordPlayStat(track) {
   const snapshot = trackToSnapshot(track)
@@ -1481,11 +1502,7 @@ function buildPlaylistCardsUncached(allTracks, { limit } = {}) {
     if (card.id === 'recent-added') tracks = recentAdded
     else if (card.id === 'recent-played') tracks = resolveTracksByKeys(recentPlays.value.map(r => r.key), allTracks, recentPlays.value)
     else if (card.id === 'play-rank') {
-      tracks = getPlayRankEntries('week').map((row) => {
-        const resolved = resolveTracksByKeys([row.key], allTracks, [row])[0]
-        const base = resolved || snapshotToPlayTrack(row) || row
-        return { ...base, key: row.key, playCount: row.playCount }
-      })
+      tracks = getPlayRankEntries('week').map((row) => resolvePlayRankTrack(row, allTracks)).filter(Boolean)
     }
     else if (card.id === 'favorites') tracks = resolveTracksByKeys(favorites.value.map(f => f.key), allTracks, favorites.value)
     else if (card.id === 'roam') tracks = resolveRoamTracks(allTracks)

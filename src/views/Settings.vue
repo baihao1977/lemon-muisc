@@ -95,7 +95,7 @@
           <header class="account-zone-head">
             <div>
               <h4 class="account-zone-title">用户管理</h4>
-              <p class="account-zone-desc">创建普通账号或管理员，并指定路径权限：共用管理员路径、专属路径，或允许用户自行选择。</p>
+              <p class="account-zone-desc">创建普通账号或管理员；可指定路径权限，以及是否允许普通用户使用下载功能。</p>
             </div>
           </header>
           <div class="account-block">
@@ -121,6 +121,10 @@
                 <span>路径权限</span>
                 <AppSelect v-model="newUser.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="200px" />
               </label>
+              <label class="field-inline" v-if="newUser.role !== 'admin'">
+                <span>允许下载</span>
+                <AppSelect v-model="newUser.allowDownload" :options="allowDownloadOptions" min-width="120px" />
+              </label>
               <button class="btn-primary btn-sm" type="submit" :disabled="creatingUser">
                 {{ creatingUser ? '创建中…' : '创建用户' }}
               </button>
@@ -128,11 +132,12 @@
           </div>
           <div class="account-block">
             <div class="account-block-title">用户列表</div>
-            <div v-if="managedUsers.length" class="user-table user-table-with-path">
+            <div v-if="managedUsers.length" class="user-table user-table-with-path user-table-with-download">
               <div class="user-table-head">
                 <span>用户</span>
                 <span>角色</span>
                 <span>路径权限</span>
+                <span>下载</span>
                 <span>操作</span>
               </div>
               <div v-for="u in managedUsers" :key="u.id" class="user-table-row">
@@ -150,6 +155,10 @@
                       <span>下载目录</span>
                       <AppSelect v-model="editUserForm.downloadPathPolicy" :options="downloadPathPolicyOptions" min-width="180px" />
                     </label>
+                    <label class="field-inline" v-if="editUserForm.role !== 'admin'">
+                      <span>允许下载</span>
+                      <AppSelect v-model="editUserForm.allowDownload" :options="allowDownloadOptions" min-width="120px" />
+                    </label>
                   </div>
                   <div class="user-row-actions">
                     <button class="btn-sm btn-primary" type="button" :disabled="userUpdating" @click="saveManagedUserEdit">保存</button>
@@ -163,6 +172,7 @@
                   </div>
                   <div class="user-cell-role">{{ u.role === 'admin' ? '管理员' : '普通用户' }}</div>
                   <div class="user-cell-path-policy">{{ downloadPathPolicyLabel(u.downloadPathPolicy) }}</div>
+                  <div class="user-cell-download">{{ downloadAllowedLabel(u) }}</div>
                   <div class="user-row-actions">
                     <button class="btn-sm btn-ghost" type="button" @click="startManagedUserEdit(u)">编辑</button>
                     <button class="btn-sm btn-ghost" type="button" @click="openResetPasswordModal(u)">重置密码</button>
@@ -1576,7 +1586,11 @@ const managedUsers = ref([])
 const creatingUser = ref(false)
 const editingUserId = ref(null)
 const userUpdating = ref(false)
-const editUserForm = reactive({ displayName: '', role: 'user', downloadPathPolicy: 'choose' })
+const editUserForm = reactive({ displayName: '', role: 'user', downloadPathPolicy: 'choose', allowDownload: 'true' })
+const allowDownloadOptions = [
+  { value: 'true', label: '允许' },
+  { value: 'false', label: '禁止' },
+]
 const resetPasswordUser = ref(null)
 const resetPasswordForm = reactive({ password: '', confirm: '' })
 const resetPasswordSaving = ref(false)
@@ -1600,6 +1614,7 @@ const newUser = reactive({
   password: '',
   role: 'user',
   downloadPathPolicy: 'choose',
+  allowDownload: 'true',
 })
 
 const settings = reactive({})
@@ -2227,12 +2242,14 @@ async function createManagedUser() {
       displayName: newUser.displayName || newUser.username,
       role: newUser.role,
       downloadPathPolicy: newUser.downloadPathPolicy || 'choose',
+      allowDownload: newUser.role === 'admin' ? true : newUser.allowDownload !== 'false',
     })
     newUser.username = ''
     newUser.displayName = ''
     newUser.password = ''
     newUser.role = 'user'
     newUser.downloadPathPolicy = 'choose'
+    newUser.allowDownload = 'true'
     await loadManagedUsers()
     showToast('用户已创建', 'success')
   } catch (e) {
@@ -2285,10 +2302,19 @@ function startManagedUserEdit(user) {
   editUserForm.downloadPathPolicy = ['shared', 'personal', 'choose'].includes(user.downloadPathPolicy)
     ? user.downloadPathPolicy
     : 'choose'
+  editUserForm.allowDownload = user.role === 'admin' || !(user.allowDownload === false || user.downloadAllowed === false)
+    ? 'true'
+    : 'false'
 }
 
 function cancelManagedUserEdit() {
   editingUserId.value = null
+}
+
+function downloadAllowedLabel(user) {
+  if (user?.role === 'admin') return '始终允许'
+  if (user?.allowDownload === false || user?.downloadAllowed === false) return '禁止'
+  return '允许'
 }
 
 const LAST_ADMIN_ROLE_TIP = '不能修改为普通用户，已经没有其他管理员账号'
@@ -2322,6 +2348,7 @@ async function saveManagedUserEdit() {
       displayName: editUserForm.displayName.trim(),
       role: editUserForm.role,
       downloadPathPolicy: editUserForm.downloadPathPolicy,
+      allowDownload: editUserForm.role === 'admin' ? true : editUserForm.allowDownload !== 'false',
     })
     const idx = managedUsers.value.findIndex(u => u.id === editingUserId.value)
     if (idx >= 0 && res.user) managedUsers.value[idx] = res.user
@@ -5281,7 +5308,14 @@ function showToast(text, type = 'info') {
 }
 .user-row-name { font-size: 14px; color: var(--text); }
 .user-row-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.user-row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.user-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+  justify-content: flex-start;
+  align-items: center;
+}
 .playlist-sync-settings {
   margin-top: 20px;
   padding: 14px 16px;
@@ -5381,26 +5415,42 @@ function showToast(text, type = 'info') {
 .account-field input { width: 100%; min-width: 0; }
 .account-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .user-table { display: flex; flex-direction: column; gap: 8px; }
+/* 表头与每行是独立 grid：操作列不能用 auto，否则列宽互不相同导致对不齐 */
 .user-table-head,
 .user-table-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.2fr) 88px minmax(160px, 1.2fr) auto;
+  grid-template-columns: minmax(140px, 1.4fr) 88px minmax(140px, 1.2fr) 88px 228px;
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
   border-radius: var(--radius);
+  box-sizing: border-box;
+  width: 100%;
+}
+.user-table-with-path:not(.user-table-with-download) .user-table-head,
+.user-table-with-path:not(.user-table-with-download) .user-table-row {
+  grid-template-columns: minmax(140px, 1.4fr) 88px minmax(160px, 1.2fr) 228px;
 }
 .user-table-head {
   font-size: 12px;
   color: var(--text-muted);
-  padding-bottom: 4px;
+  /* 与行同宽：透明边框占位，避免有边框的行把内容挤窄导致列对不齐 */
+  border: 1px solid transparent;
+  margin-bottom: -2px;
 }
 .user-table-row {
   background: var(--bg-elevated);
   border: 1px solid var(--border-light);
 }
+.user-cell-name,
 .user-cell-role,
-.user-cell-path-policy { font-size: 13px; color: var(--text-secondary); }
+.user-cell-path-policy,
+.user-cell-download {
+  min-width: 0;
+}
+.user-cell-role,
+.user-cell-path-policy,
+.user-cell-download { font-size: 13px; color: var(--text-secondary); }
 .path-policy-locked {
   font-size: 13px;
   color: var(--text-secondary);

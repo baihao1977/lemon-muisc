@@ -1,13 +1,32 @@
 import { ref } from 'vue'
 import { api } from '../api.js'
+import { canUseDownload } from '../utils/auth.js'
 
 export const noActiveSourcePrompt = ref(null)
+export const downloadForbiddenPrompt = ref(null)
 
 export function clearNoActiveSourcePrompt() {
   noActiveSourcePrompt.value = null
 }
 
+export function clearDownloadForbiddenPrompt() {
+  downloadForbiddenPrompt.value = null
+}
+
+export function assertDownloadPermission() {
+  if (canUseDownload.value) {
+    clearDownloadForbiddenPrompt()
+    return true
+  }
+  downloadForbiddenPrompt.value = {
+    message: '当前账号未开放下载功能，请联系管理员。',
+  }
+  return false
+}
+
 export async function assertActiveSourceForDownload() {
+  if (!assertDownloadPermission()) return false
+
   let hasActive = false
   try {
     const data = await api.source.active()

@@ -14,7 +14,7 @@
         </label>
         <label class="field">
           <span class="field-label-row">
-            <span>密码</span>
+          <span>密码</span>
             <button type="button" class="forgot-link" @click="showForgot = true">忘记密码？</button>
           </span>
           <input v-model="password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
@@ -29,7 +29,7 @@
           {{ loading ? '登录中…' : '登录' }}
         </button>
       </form>
-    </div>
+            </div>
 
     <div v-if="showForgot" class="modal-overlay" @click.self="showForgot = false">
       <div class="modal-card" role="dialog" aria-labelledby="forgot-title" aria-modal="true">

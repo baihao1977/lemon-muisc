@@ -70,6 +70,7 @@
         <span class="nav-divider nav-divider-gap" aria-hidden="true"></span>
         <div class="nav-group">
           <router-link
+            v-if="canUseDownload"
             to="/download"
             class="nav-item"
             active-class="active"
@@ -266,6 +267,16 @@
         <div class="downgrade-actions">
           <button class="btn-ghost" type="button" @click="clearNoActiveSourcePrompt">关闭</button>
           <router-link to="/settings?tab=source" class="btn-primary fault-settings-btn" @click="clearNoActiveSourcePrompt">前往设置 → 音源管理</router-link>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="downloadForbiddenPrompt" class="modal-overlay downgrade-overlay" @click.self="clearDownloadForbiddenPrompt">
+      <div class="downgrade-modal">
+        <h3>无法下载</h3>
+        <p class="downgrade-desc">{{ downloadForbiddenPrompt.message }}</p>
+        <div class="downgrade-actions">
+          <button class="btn-primary" type="button" @click="clearDownloadForbiddenPrompt">知道了</button>
         </div>
       </div>
     </div>
@@ -479,6 +490,7 @@
         <span>情绪</span>
       </router-link>
       <router-link
+        v-if="canUseDownload"
         to="/download"
         class="tab-item"
         active-class="active"
@@ -606,7 +618,7 @@ import { initPlayer, showFullscreenPlayer, playerNotice, clearPlayerNotice, setA
 import { checkForUpdate, hasUpdate } from './composables/useUpdateCheck.js'
 import { api } from './api.js'
 import {
-  currentUser, logout as authLogout, isAuthReady, isSessionValid, getToken,
+  currentUser, canUseDownload, logout as authLogout, isAuthReady, isSessionValid, getToken,
   isAuthenticated, needsSetup,
 } from './utils/auth.js'
 import { useRouter } from 'vue-router'
@@ -653,6 +665,8 @@ import {
 import {
   noActiveSourcePrompt,
   clearNoActiveSourcePrompt,
+  downloadForbiddenPrompt,
+  clearDownloadForbiddenPrompt,
 } from './stores/downloadGuard.js'
 import {
   isRouteLoading, pendingRoutePage, MAIN_TAB_NAMES,

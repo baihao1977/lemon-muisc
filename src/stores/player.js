@@ -605,6 +605,11 @@ let lastSessionSave = 0
 let mediaSessionInited = false
 /** 切后台时临时改走原生输出（频谱开启时 Web Audio 在 PWA/手机上无法续播） */
 let backgroundNativeOverride = false
+/**
+ * 内部重建/Seek 引起的 pause 不计为「被其它 App 抢焦点」。
+ * >0 时 pause 事件不要把 isPaused 设为 true，也不要强行 play。
+ */
+let suppressAudioFocusPause = 0
 /** 上次写入 MediaSession 的曲目 key，避免重复刷 metadata/artwork */
 let lastMediaSessionTrackKey = ''
 /** 歌词行刷新节流（CarPlay/流畅模式加大间隔，减轻主线程） */
@@ -1403,11 +1408,16 @@ function bindAudioElementEvents(el) {
       syncMediaSessionPlaybackState()
       return
     }
-    // 系统在后台误暂停：用户仍想播时主动续上（PWA 常见）
-    if (isBackgroundPlayActive() && hasMediaSrc && document.visibilityState === 'hidden') {
-      el.play().catch(() => {})
+    // 切歌 / Seek / 重建原生输出等内部操作触发的 pause：忽略
+    if (suppressAudioFocusPause > 0 || seekInProgress || loadingPlay.value || endedHandling) {
       return
     }
+    // 其它视频/音频 App 抢占焦点、或系统打断：同步为暂停。
+    // 旧逻辑在 hidden 时强制 play()，会和别的软件声音叠在一起。
+    isPaused.value = true
+    endPlaybackBuffer()
+    syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
   })
   el.addEventListener('ended', () => {
     if (audio === el && !dlnaCastingUdn.value) onTrackEnded()
@@ -1481,23 +1491,28 @@ async function restoreNativeAudioOutput() {
   const src = audio.src
   const time = audio.currentTime || 0
   const wasPlaying = !audio.paused && !isPaused.value
-  recreateMainAudioElement()
-  if (!src || !hasMediaSrc) {
-    applyAudioOutput()
-    return
-  }
-  applyAudioCrossOrigin(audio, src)
-  audio.src = src
+  suppressAudioFocusPause += 1
   try {
-    await waitForAudioReady(src, { isLocal: src.includes('/api/play/local') })
-    if (time > 0) {
-      audio.currentTime = time
-      currentTime.value = time
+    recreateMainAudioElement()
+    if (!src || !hasMediaSrc) {
+      applyAudioOutput()
+      return
     }
-  } catch {}
-  applyAudioOutput()
-  if (wasPlaying && !dlnaCastingUdn.value) {
-    try { await audio.play() } catch {}
+    applyAudioCrossOrigin(audio, src)
+    audio.src = src
+    try {
+      await waitForAudioReady(src, { isLocal: src.includes('/api/play/local') })
+      if (time > 0) {
+        audio.currentTime = time
+        currentTime.value = time
+      }
+    } catch {}
+    applyAudioOutput()
+    if (wasPlaying && !dlnaCastingUdn.value) {
+      try { await audio.play() } catch {}
+    }
+  } finally {
+    suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
   }
 }
 
@@ -1748,19 +1763,25 @@ async function applyBackgroundPlayMode() {
 
 async function prepareNativeOutputForBackground() {
   if (!audio || isPaused.value || !hasMediaSrc) return
-  // Web Audio 在 hidden 时会被挂起：只要已经 createMediaElementSource，必须重建为原生 <audio>
-  if (isMainAudioTapped()) {
-    backgroundNativeOverride = true
-    await restoreNativeAudioOutput()
-  } else if (visualizerEnabled.value) {
-    // 尚未建图也先占住 override，避免切后台瞬间又被 ensurePlaybackGraph 挂上
-    backgroundNativeOverride = true
-  }
-  updateMediaSession()
-  syncMediaSessionPlaybackState()
-  syncMediaSessionPosition()
-  if (audio.paused && !isPaused.value) {
-    try { await audio.play() } catch {}
+  suppressAudioFocusPause += 1
+  try {
+    // Web Audio 在 hidden 时会被挂起：只要已经 createMediaElementSource，必须重建为原生 <audio>
+    if (isMainAudioTapped()) {
+      backgroundNativeOverride = true
+      await restoreNativeAudioOutput()
+    } else if (visualizerEnabled.value) {
+      // 尚未建图也先占住 override，避免切后台瞬间又被 ensurePlaybackGraph 挂上
+      backgroundNativeOverride = true
+    }
+    updateMediaSession()
+    syncMediaSessionPlaybackState()
+    syncMediaSessionPosition()
+    // 仅「切后台保活续播」时主动 play；被其它 App 打断后 isPaused 已为 true，不会走到这里
+    if (audio.paused && !isPaused.value) {
+      try { await audio.play() } catch {}
+    }
+  } finally {
+    suppressAudioFocusPause = Math.max(0, suppressAudioFocusPause - 1)
   }
 }
 

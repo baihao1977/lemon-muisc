@@ -69,8 +69,19 @@ import {
   pausePlaylistDownloadJob,
   findActiveJobForPlaylist,
 } from '../utils/playlistDownloadJob.js'
+import {
+  isDownloadAllowedForUser,
+  downloadForbiddenPayload,
+} from '../utils/downloadPermission.js'
 
 export const downloadRouter = Router()
+
+/** 禁止未开放下载权限的普通用户发起/变更下载（允许查看列表） */
+downloadRouter.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next()
+  if (isDownloadAllowedForUser(req.user)) return next()
+  return res.status(403).json(downloadForbiddenPayload())
+})
 
 const activeDownloads = new Map()
 /** 用户对本批同名文件的默认处理：skip | overwrite */
@@ -220,6 +231,7 @@ export function enqueueDownloadTasks(userId, tasks, { broadcastAdded = true } = 
         album: t.album || '',
         replacePath,
         forceOverwrite: Boolean(t.forceOverwrite || replacePath),
+        sourceApiId: String(t.sourceApiId || '').trim(),
       })
       insert.run(id, t.name, t.singer || t.albumArtist || '', t.source || '', t.album || '', t.interval || '', quality, meta, userId)
       added.push(id)
@@ -632,11 +644,29 @@ function removeDownloadTask(id, { deleteFile = false } = {}) {
 }
 
 function reconcileStaleDownloads() {
-  const rows = getDB().prepare("SELECT id FROM download_tasks WHERE status = 'downloading'").all()
+  // 进程重启后 activeDownloads 为空，库里仍标 downloading 会永远卡住
+  const rows = getDB().prepare("SELECT * FROM download_tasks WHERE status = 'downloading'").all()
   for (const row of rows) {
     if (activeDownloads.has(row.id)) continue
-    getDB().prepare("UPDATE download_tasks SET status = 'paused' WHERE id = ?").run(row.id)
-    dlBroadcast('download:status', { id: row.id, status: 'paused' })
+    const partBytes = partFileSize(getTaskPartPath(row.id))
+    const total = Number(row.total_size) || 0
+    const downloaded = partBytes > 0 ? partBytes : (Number(row.downloaded_size) || 0)
+    const progress = total > 0 ? Math.min(1, downloaded / total) : (Number(row.progress) || 0)
+    getDB().prepare(`
+      UPDATE download_tasks
+      SET status = 'waiting', downloaded_size = ?, progress = ?, error = NULL
+      WHERE id = ?
+    `).run(downloaded, progress, row.id)
+    const tip = partBytes > 0 ? '服务重启，等待断点续传…' : '服务重启，重新排队…'
+    dlBroadcast('download:status', {
+      id: row.id,
+      status: 'waiting',
+      progress,
+      downloaded,
+      total,
+      tip,
+      error: '',
+    })
   }
 }
 
@@ -662,27 +692,46 @@ function pauseTasks(ids = null) {
   return count
 }
 
-function requeueTask(id, { allowedStatuses = ['paused', 'error', 'await_confirm', 'await_exist'], cleanupFiles = true, pump = true } = {}) {
+function requeueTask(id, {
+  allowedStatuses = ['paused', 'error', 'await_confirm', 'await_exist'],
+  cleanupFiles = true,
+  preserveProgress = false,
+  pump = true,
+} = {}) {
   const row = getDB().prepare('SELECT * FROM download_tasks WHERE id = ?').get(id)
   if (!row || !allowedStatuses.includes(row.status)) return false
 
   const forceRedownload = ['error', 'await_confirm', 'await_exist'].includes(row.status)
-  const { meta } = prepareTaskForRetry(row, { cleanupFiles, forceRedownload })
+  // 手动继续 / 续传：保留 .part 与进度，不要当成失败重下
+  const shouldCleanup = cleanupFiles && !preserveProgress
+  const { meta } = prepareTaskForRetry(row, { cleanupFiles: shouldCleanup, forceRedownload: forceRedownload && !preserveProgress })
   if (row.status === 'await_exist') {
     meta.existFileConfirmed = true
     delete meta.existFileOffer
   }
 
+  const partBytes = preserveProgress ? partFileSize(getTaskPartPath(id)) : 0
+  const total = Number(row.total_size) || 0
+  const downloaded = preserveProgress
+    ? (partBytes > 0 ? partBytes : (Number(row.downloaded_size) || 0))
+    : 0
+  const progress = preserveProgress
+    ? (total > 0 ? Math.min(1, downloaded / total) : (Number(row.progress) || 0))
+    : 0
+
   getDB().prepare(`
     UPDATE download_tasks
-    SET status = 'waiting', error = NULL, progress = 0, downloaded_size = 0, file_path = NULL, meta = ?
+    SET status = 'waiting', error = NULL, progress = ?, downloaded_size = ?, file_path = NULL, meta = ?
     WHERE id = ?
-  `).run(JSON.stringify(meta), id)
+  `).run(progress, downloaded, JSON.stringify(meta), id)
   dlBroadcast('download:status', {
     id,
     status: 'waiting',
     error: '',
-    progress: 0,
+    progress,
+    downloaded,
+    total,
+    tip: preserveProgress && downloaded > 0 ? '继续断点续传…' : '',
     downgradeOffer: null,
     existFileOffer: null,
   })
@@ -761,7 +810,7 @@ function confirmPendingExistForUser(userId, { exceptId, action } = {}) {
 }
 
 function resumeTask(id) {
-  return requeueTask(id)
+  return requeueTask(id, { cleanupFiles: false, preserveProgress: true })
 }
 
 function resumeTasks(ids = null) {
@@ -771,7 +820,7 @@ function resumeTasks(ids = null) {
   let count = 0
   for (const row of rows) {
     // 批量续传：只改状态，最后统一泵一次，避免每条都 processQueue 重入
-    if (requeueTask(row.id, { pump: false })) count++
+    if (requeueTask(row.id, { cleanupFiles: false, preserveProgress: true, pump: false })) count++
   }
   if (count) processQueue()
   return count
@@ -949,6 +998,29 @@ async function tryCrossPlatformSameQuality(task, meta, quality, settings) {
   return applyCrossPlatformDownloadHit(task, meta, hit, quality)
 }
 
+/** 重试文案：校验失败不要说成「网络抖动」，否则用户以为断点续传坏了 */
+function downloadRetryTip(attempt, lastError, partBytes = 0) {
+  const n = `${attempt}/${SAME_QUALITY_ATTEMPTS}`
+  const msg = String(lastError?.message || '')
+  const code = lastError?.code || ''
+  if (code === 'FAKE_LOSSLESS' || /假无损|不是有效 FLAC|不是 FLAC/i.test(msg)) {
+    return `文件校验失败（假无损），换源重试（${n}）…`
+  }
+  if (code === 'PREVIEW_CLIP' || /试听片段|时长不完整/i.test(msg)) {
+    return `检测到试听片段，换源重试（${n}）…`
+  }
+  if (/HTTP\s*40[134]|下载响应异常 HTTP 40/i.test(msg)) {
+    return `链接失效，换链重试（${n}）…`
+  }
+  if (partBytes > 0) {
+    return `网络中断，断点续传（${n}）…`
+  }
+  if (/ECONNRESET|ETIMEDOUT|timeout|timed out|socket hang up|请求超时/i.test(msg)) {
+    return `网络抖动，重试中（${n}）…`
+  }
+  return `下载失败，重试中（${n}）…`
+}
+
 function shouldSkipSourceAfterError(error) {
   const message = error?.message || String(error || '')
   const code = error?.code || ''
@@ -1098,40 +1170,114 @@ async function resolveDownloadUrl(source, quality, musicInfo, settings, meta = {
   return { url, sourceInfo: result }
 }
 
+/** needle 的 read_timeout 是「整段 body 最长耗时」，不是空闲超时；母带大文件常远超 2 分钟 */
+const DOWNLOAD_RESPONSE_TIMEOUT_MS = 90000
+/** 无数据到达才算卡住；有进度的慢速大文件不中断 */
+const DOWNLOAD_IDLE_TIMEOUT_MS = 3 * 60 * 1000
+
 async function streamToFile(url, partPath, taskId, abort, quality = '', source = '') {
   const { default: needlePkg } = await import('needle')
+
+  let existing = 0
+  try {
+    if (fs.existsSync(partPath)) existing = fs.statSync(partPath).size || 0
+  } catch {
+    existing = 0
+  }
+
+  if (existing > 0) {
+    let knownTotal = 0
+    try {
+      knownTotal = Number(getDB().prepare('SELECT total_size FROM download_tasks WHERE id = ?').get(taskId)?.total_size) || 0
+    } catch {}
+    publishTaskProgress(taskId, {
+      downloaded: existing,
+      total: knownTotal,
+      tip: '网络中断，正在断点续传…',
+    })
+  }
+
+  const headers = buildMusicCdnHeaders(source, existing > 0 ? { Range: `bytes=${existing}-` } : {})
   const stream = needlePkg.get(url, {
     follow_max: 5,
     signal: abort.signal,
-    response_timeout: 60000,
-    read_timeout: 120000,
-    headers: buildMusicCdnHeaders(source),
+    open_timeout: 30000,
+    response_timeout: DOWNLOAD_RESPONSE_TIMEOUT_MS,
+    // 0 = 不限制总传输时长（避免母带下到一半被 read timeout 掐断后从头重下）
+    read_timeout: 0,
+    headers,
   })
-  safeUnlink(partPath)
-  const writer = fs.createWriteStream(partPath)
-  let downloaded = 0
-  let total = 0
 
-  stream.on('header', (code, headers) => {
+  let writer = null
+  let downloaded = existing
+  let total = 0
+  let settled = false
+
+  const openWriter = (append) => {
+    if (writer) {
+      try { writer.destroy() } catch {}
+      writer = null
+    }
+    if (!append) safeUnlink(partPath)
+    writer = fs.createWriteStream(partPath, append ? { flags: 'a' } : undefined)
+  }
+
+  if (existing <= 0) openWriter(false)
+  else openWriter(true)
+
+  stream.on('header', (code, respHeaders) => {
     if (code && code >= 400) {
       stream.emit('err', new Error(`下载响应异常 HTTP ${code}`))
       return
     }
     try {
-      assertLosslessContentType(headers?.['content-type'], quality)
+      assertLosslessContentType(respHeaders?.['content-type'], quality)
     } catch (e) {
       stream.emit('err', e)
       return
     }
-    total = parseInt(headers['content-length']) || 0
-    getDB().prepare('UPDATE download_tasks SET total_size = ? WHERE id = ?').run(total, taskId)
+
+    let tip = ''
+    if (existing > 0 && code === 200) {
+      // CDN 不支持 Range：丢弃半成品从头写
+      existing = 0
+      downloaded = 0
+      openWriter(false)
+      total = parseInt(respHeaders['content-length'], 10) || 0
+      tip = '当前链接不支持续传，已重新下载'
+    } else if (existing > 0 && code === 206) {
+      const cr = String(respHeaders['content-range'] || '')
+      const m = /\/(\d+)\s*$/.exec(cr)
+      total = m ? parseInt(m[1], 10) || 0 : (existing + (parseInt(respHeaders['content-length'], 10) || 0))
+      tip = '断点续传中…'
+    } else {
+      total = parseInt(respHeaders['content-length'], 10) || 0
+    }
+    publishTaskProgress(taskId, { downloaded, total, tip })
   })
 
   try {
     await new Promise((resolve, reject) => {
       let lastProgressAt = 0
+      let lastDataAt = Date.now()
       let pendingProgress = null
       let progressTimer = null
+      let idleTimer = null
+
+      const finish = (err) => {
+        if (settled) return
+        settled = true
+        if (progressTimer) {
+          clearTimeout(progressTimer)
+          progressTimer = null
+        }
+        if (idleTimer) {
+          clearInterval(idleTimer)
+          idleTimer = null
+        }
+        if (err) reject(err)
+        else resolve()
+      }
 
       const flushProgress = (force = false) => {
         if (!pendingProgress) return
@@ -1145,9 +1291,9 @@ async function streamToFile(url, partPath, taskId, abort, quality = '', source =
         pendingProgress = null
       }
 
-      const scheduleProgress = (downloaded, total) => {
-        const progress = total > 0 ? downloaded / total : 0
-        pendingProgress = { downloaded, progress, total }
+      const scheduleProgress = (nextDownloaded, nextTotal) => {
+        const progress = nextTotal > 0 ? nextDownloaded / nextTotal : 0
+        pendingProgress = { downloaded: nextDownloaded, progress, total: nextTotal }
         if (!progressTimer) {
           progressTimer = setTimeout(() => {
             progressTimer = null
@@ -1156,29 +1302,52 @@ async function streamToFile(url, partPath, taskId, abort, quality = '', source =
         }
       }
 
+      idleTimer = setInterval(() => {
+        if (Date.now() - lastDataAt >= DOWNLOAD_IDLE_TIMEOUT_MS) {
+          const err = new Error('read timeout')
+          err.code = 'ETIMEDOUT'
+          try { stream.destroy(err) } catch {}
+          finish(err)
+        }
+      }, 5000)
+
       stream.on('data', (chunk) => {
+        lastDataAt = Date.now()
         downloaded += chunk.length
-        writer.write(chunk)
+        try {
+          if (writer && !writer.destroyed) writer.write(chunk)
+        } catch (e) {
+          finish(e)
+          return
+        }
         scheduleProgress(downloaded, total)
       })
       stream.on('done', (err) => {
-        if (progressTimer) {
-          clearTimeout(progressTimer)
-          progressTimer = null
-        }
         if (!err && pendingProgress) flushProgress(true)
-        writer.end()
-        if (err) reject(err)
-        else resolve()
+        if (!writer || writer.destroyed) {
+          if (err) finish(err)
+          else finish()
+          return
+        }
+        writer.end(() => {
+          if (err) finish(err)
+          else finish()
+        })
       })
       stream.on('err', (err) => {
-        try { writer.destroy() } catch {}
-        reject(err)
+        try { writer?.destroy() } catch {}
+        finish(err)
+      })
+      stream.on('timeout', () => {
+        const err = new Error('read timeout')
+        err.code = 'ETIMEDOUT'
+        finish(err)
       })
     })
   } catch (e) {
-    try { writer.destroy() } catch {}
-    safeUnlink(partPath)
+    try { writer?.destroy() } catch {}
+    // 可重试的网络错误保留 .part，下次同路径可 Range 续传
+    if (!isRetryableDownloadError(e)) safeUnlink(partPath)
     throw e
   }
 }
@@ -1405,6 +1574,42 @@ function getDownloadStagingRoot() {
 
 function getDownloadStagingDir(taskId) {
   return path.join(getDownloadStagingRoot(), String(taskId || 'unknown'))
+}
+
+/** 固定半成品名，避免换文件名/扩展名后找不到 .part，续传失败看起来像「重新下载」 */
+function getTaskPartPath(taskId) {
+  return path.join(getDownloadStagingDir(taskId), 'download.part')
+}
+
+function partFileSize(partPath) {
+  try {
+    if (partPath && fs.existsSync(partPath)) return fs.statSync(partPath).size || 0
+  } catch {}
+  return 0
+}
+
+function publishTaskProgress(taskId, { downloaded = 0, total = 0, tip = '' } = {}) {
+  const progress = total > 0 ? downloaded / total : 0
+  try {
+    if (total > 0) {
+      getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ?, total_size = ? WHERE id = ?')
+        .run(downloaded, progress, total, taskId)
+    } else {
+      getDB().prepare('UPDATE download_tasks SET downloaded_size = ?, progress = ? WHERE id = ?')
+        .run(downloaded, progress, taskId)
+    }
+  } catch {}
+  dlBroadcast('download:progress', { id: taskId, progress, downloaded, total })
+  if (tip) {
+    dlBroadcast('download:status', {
+      id: taskId,
+      status: 'downloading',
+      progress,
+      downloaded,
+      total,
+      tip,
+    })
+  }
 }
 
 function cleanupStagingDir(taskId) {
@@ -1831,6 +2036,18 @@ async function downloadTask(task, settings, abortSignal = null) {
           let publishedDest = false
           try {
             if (attempt > 1 || hop > 0 || si > 0) {
+              const partBytes = partFileSize(getTaskPartPath(task.id))
+              const tip = downloadRetryTip(attempt, lastError, partBytes)
+              let totalSize = 0
+              try {
+                totalSize = Number(getDB().prepare('SELECT total_size FROM download_tasks WHERE id = ?').get(task.id)?.total_size) || 0
+              } catch {}
+              // 校验失败会删掉半成品，进度归零是预期；有 .part 则保持进度续传
+              publishTaskProgress(task.id, {
+                downloaded: partBytes,
+                total: partBytes > 0 ? totalSize : 0,
+                tip,
+              })
               dlBroadcast('download:status', {
                 id: task.id,
                 status: 'downloading',
@@ -1838,6 +2055,9 @@ async function downloadTask(task, settings, abortSignal = null) {
                 source,
                 retryAttempt: attempt,
                 retryTotal: SAME_QUALITY_ATTEMPTS,
+                tip,
+                progress: partBytes > 0 && totalSize > 0 ? partBytes / totalSize : 0,
+                error: '',
               })
               if (attempt > 1) await sleep(downloadRetryDelayMs(attempt - 1, lastError, RETRY_DELAY_MS))
             }
@@ -1868,7 +2088,12 @@ async function downloadTask(task, settings, abortSignal = null) {
             const stagingDir = getDownloadStagingDir(task.id)
             fs.mkdirSync(stagingDir, { recursive: true })
             const stagedPath = path.join(stagingDir, path.basename(filePath))
-            partPath = partPathFor(stagedPath)
+            // 固定 part 路径，同任务网络重试可续传；换音质则清掉旧半成品
+            partPath = getTaskPartPath(task.id)
+            if (meta.resumeQuality && meta.resumeQuality !== quality) {
+              safeUnlink(partPath)
+            }
+            meta.resumeQuality = quality
             lastAttemptPath = filePath
             publishedDest = false
             saveTaskMeta(task.id, meta)
@@ -1919,6 +2144,11 @@ async function downloadTask(task, settings, abortSignal = null) {
               if (postErr) {
                 cleanupDownloadPath(stagedPath)
                 cleanupStagingDir(task.id)
+                publishTaskProgress(task.id, {
+                  downloaded: 0,
+                  total: 0,
+                  tip: '检测到试听片段，已拒绝保存，正在换源…',
+                })
                 if (!meta.lockedSourceApiId) skipCurrentDownloadSource(meta, task.id, source)
                 throw postErr
               }
@@ -1929,6 +2159,14 @@ async function downloadTask(task, settings, abortSignal = null) {
             } catch (formatErr) {
               cleanupDownloadPath(stagedPath)
               cleanupStagingDir(task.id)
+              // 下到 100% 后因假无损被拒：立刻提示，避免被当成「网络抖动又重下」
+              publishTaskProgress(task.id, {
+                downloaded: 0,
+                total: 0,
+                tip: formatErr?.code === 'FAKE_LOSSLESS'
+                  ? '文件校验失败（假无损），已拒绝保存，正在换源…'
+                  : '文件校验失败，正在换源…',
+              })
               if (formatErr?.code === 'FAKE_LOSSLESS' && !meta.lockedSourceApiId) {
                 skipCurrentDownloadSource(meta, task.id, source)
               }
@@ -1965,7 +2203,7 @@ async function downloadTask(task, settings, abortSignal = null) {
 
             getDB().prepare("UPDATE download_tasks SET status = 'completed', file_path = ?, progress = 1, error = NULL WHERE id = ?")
               .run(filePath, task.id)
-            dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality, source })
+            dlBroadcast('download:status', { id: task.id, status: 'completed', progress: 1, filePath, quality, source, tip: '' })
             scanBatchAndCache([{ filePath }]).then((rows) => {
               if (rows?.length) bumpLibraryIndexRevision()
             }).catch(() => {})
@@ -1976,15 +2214,17 @@ async function downloadTask(task, settings, abortSignal = null) {
             } catch {}
             return
           } catch (e) {
-            cleanupDownloadPath(partPath)
-            cleanupStagingDir(task.id)
+            const retryableEarly = isRetryableDownloadError(e)
+            // 网络抖动保留 .part 以便续传；不可重试错误再清掉半成品
+            if (!retryableEarly) cleanupDownloadPath(partPath)
+            if (!retryableEarly) cleanupStagingDir(task.id)
             if (filePath && publishedDest) {
               cleanupDownloadPath(filePath)
               rememberDownloadArtifact(meta, filePath)
             }
             if (e.name === 'AbortError') return
             lastError = e
-            const retryable = isRetryableDownloadError(e)
+            const retryable = retryableEarly
             if (meta.lockedSourceApiId) {
               // 锁定音源：网络抖动可同源重试；假无损/试听等立刻换平台或下一音源
               console.warn(`[下载] ${task.name} ${quality}@${source} 音源锁定第 ${attempt}/${SAME_QUALITY_ATTEMPTS} 次失败: ${e.message}`)

@@ -1,50 +1,14 @@
 import { Router } from 'express'
 import { getLibraryUserData, setLibraryUserData } from '../utils/libraryUserData.js'
-import { getUserSettings, setUserSettings, USER_SETTING_KEYS } from '../utils/userSettings.js'
+import { setUserSettings, USER_SETTING_KEYS } from '../utils/userSettings.js'
 import { notifyLibraryUserDataChanged } from '../utils/libraryNotify.js'
+import { buildUserBackupPayload, EXPORTABLE_USER_KEYS } from '../utils/autoUserBackup.js'
 
 export const backupRouter = Router()
 
-const EXPORTABLE_USER_KEYS = [
-  'ui.theme',
-  'ui.librarySongColumns',
-  'ui.lyricColorPreset',
-  'ui.lyricTextColor',
-  'ui.lyricHighlightColor',
-  'player.coverStyle',
-  'player.visualizer',
-  'playlist.remoteSyncDays',
-  'download.usePersonalSavePath',
-  'source.active',
-  'source.enabledPlatforms',
-  'source.autoClosedPlatforms',
-  'source.previewAutoCloseSkip',
-].filter((k) => USER_SETTING_KEYS.has(k))
-
 backupRouter.get('/export', (req, res) => {
   try {
-    const userData = getLibraryUserData(req.user.id)
-    const allSettings = getUserSettings(req.user.id)
-    const settings = {}
-    for (const key of EXPORTABLE_USER_KEYS) {
-      if (allSettings[key] != null) settings[key] = allSettings[key]
-    }
-    const payload = {
-      app: 'lemon-music',
-      type: 'user-backup',
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      username: req.user.username,
-      data: {
-        playlists: userData.playlists || [],
-        favorites: userData.favorites || [],
-        favoriteAlbums: userData.favoriteAlbums || [],
-        favoriteArtists: userData.favoriteArtists || [],
-        recentPlays: userData.recentPlays || [],
-        playStats: userData.playStats || [],
-        settings,
-      },
-    }
+    const payload = buildUserBackupPayload(req.user, { includeSources: true })
     res.json({ ok: true, data: payload })
   } catch (e) {
     res.status(500).json({ error: e.message })

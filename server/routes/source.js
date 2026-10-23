@@ -65,6 +65,9 @@ function insertUserApi(script, metaExtra = {}) {
     INSERT INTO user_apis (id, name, description, script, author, version, homepage, sources)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, fields.name, fields.description, script, fields.author, fields.version, fields.homepage, '{}')
+  import('../utils/autoUserBackup.js')
+    .then(({ scheduleAutoBackupAfterUserDataChange }) => scheduleAutoBackupAfterUserDataChange())
+    .catch(() => {})
   return { id, name: fields.name, version: fields.version, homepage: fields.homepage }
 }
 
@@ -106,6 +109,9 @@ function applyScriptUpdate(id, script, homepageHint = '') {
     WHERE id = ?
   `).run(fields.name, fields.description, script, fields.author, fields.version, homepage, id)
   clearSourceUpdateAlert(id)
+  import('../utils/autoUserBackup.js')
+    .then(({ scheduleAutoBackupAfterUserDataChange }) => scheduleAutoBackupAfterUserDataChange())
+    .catch(() => {})
   return {
     id,
     name: fields.name,
@@ -683,6 +689,9 @@ function deleteUserApi(id) {
   const fault = getSourceFault()
   if (fault?.id === id) clearSourceFault()
   clearSourceHealth(id)
+  import('../utils/autoUserBackup.js')
+    .then(({ scheduleAutoBackupAfterUserDataChange }) => scheduleAutoBackupAfterUserDataChange())
+    .catch(() => {})
 }
 
 sourceRouter.post('/batch/activate', async (req, res) => {

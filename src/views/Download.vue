@@ -138,7 +138,7 @@
             <span class="meta-dot" aria-hidden="true">·</span>
             <span class="meta-quality">{{ task.quality || '-' }}</span>
             <span class="meta-dot" aria-hidden="true">·</span>
-            <span class="meta-status" :class="'status-text-' + task.status">{{ statusText(task.status) }}</span>
+            <span class="meta-status" :class="'status-text-' + task.status">{{ taskStatusLabel(task) }}</span>
           </div>
           <div
             class="task-error"
@@ -387,6 +387,9 @@ unsubs.push(onWS('download:status', (d) => {
   }
   t.status = d.status
   if (d.progress !== undefined) t.progress = d.progress
+  if (d.downloaded !== undefined) t.downloaded_size = d.downloaded
+  if (d.total !== undefined) t.total_size = d.total
+  if (d.tip !== undefined) t.tip = d.tip
   if (d.error !== undefined) t.error = d.error
   if (d.quality) t.quality = d.quality
   if (d.downgradeOffer !== undefined) {
@@ -397,6 +400,7 @@ unsubs.push(onWS('download:status', (d) => {
   }
   if (d.filePath) t.file_path = d.filePath
   else if (d.status === 'completed') {
+    t.tip = ''
     const resolved = resolveTaskFilePath(t)
     if (resolved) t.file_path = resolved
   }
@@ -857,6 +861,13 @@ function statusText(s) {
     await_exist: '待处理同名',
   }
   return m[s] || s
+}
+
+/** 续传/重试时用 tip，避免进度条停住时被当成「又重新下载」 */
+function taskStatusLabel(task) {
+  const tip = String(task?.tip || '').trim()
+  if (tip && (task.status === 'downloading' || task.status === 'waiting')) return tip
+  return statusText(task?.status)
 }
 function statusIcon(s) {
   const m = { completed: '✓', paused: '⏸', waiting: '⏳', error: '✕', await_confirm: '?', await_source: '↪', await_exist: '!' }

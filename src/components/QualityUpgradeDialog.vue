@@ -16,7 +16,9 @@
         <p v-if="runError" class="qu-error">{{ runError }}</p>
       </div>
 
-      <div v-else class="qu-layout">
+      <div v-else class="qu-select-wrap">
+        <p v-if="runError" class="qu-match-miss" role="status">{{ runError }}</p>
+        <div class="qu-layout">
         <aside class="qu-controls">
           <div class="qu-section-title">选择本地格式</div>
           <div class="qu-chips" role="radiogroup" aria-label="本地格式">
@@ -144,6 +146,7 @@
             </label>
           </div>
         </aside>
+        </div>
       </div>
 
       <div class="qu-actions">
@@ -346,6 +349,7 @@ watch(preferredQuality, (q, prev) => {
   if (!props.open) return
   if (!prev || q === prev) return
   if (scanning.value || busy.value) return
+  runError.value = ''
   runScan()
 })
 
@@ -406,6 +410,7 @@ function toggleAll(on) {
 async function runScan() {
   scanning.value = true
   scanError.value = ''
+  runError.value = ''
   try {
     const res = await api.library.qualityUpgradeScan({
       preferredQuality: preferredQuality.value,
@@ -472,7 +477,7 @@ async function onStart() {
 
     if (!matched.length) {
       runError.value = unmatchedCount
-        ? `已检查 ${picked.length} 首，均未匹配到可升级为 ${qLabel} 的在线资源`
+        ? `未匹配到「${qLabel}」：已检查 ${picked.length} 首，音源均无可用资源。可改选其他目标音质、开启「允许自动降档」后重试。`
         : '没有可升级曲目'
       busy.value = false
       step.value = 'select'
@@ -544,6 +549,24 @@ async function onStart() {
   color: var(--text-muted);
 }
 
+.qu-select-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qu-match-miss {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--warning-text, #c47a1a);
+  background: color-mix(in srgb, var(--warning, #e6a23c) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #e6a23c) 35%, transparent);
+}
 .qu-layout {
   flex: 1;
   min-height: 0;
@@ -858,6 +881,10 @@ async function onStart() {
   }
 
   /* 单列文档流，整页滚动；底部操作栏固定 */
+  .qu-select-wrap {
+    flex: 1;
+    min-height: 0;
+  }
   .qu-layout {
     display: flex;
     flex-direction: column;

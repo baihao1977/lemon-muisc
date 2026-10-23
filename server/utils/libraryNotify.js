@@ -17,6 +17,10 @@ export function notifyLibraryRemoved(filePaths, extra = {}) {
 /** 通知前端用户库数据已更新（歌单/收藏/最近播放，多设备同步） */
 export function notifyLibraryUserDataChanged(userId, extra = {}) {
   broadcast('library:user-data-changed', { ...extra }, userId)
+  // 有新版本待升级时：用户数据变更则追加自动备份
+  import('./autoUserBackup.js')
+    .then(({ scheduleAutoBackupAfterUserDataChange }) => scheduleAutoBackupAfterUserDataChange())
+    .catch(() => {})
 }
 
 /** 后台扫描进度（标签读取阶段） */

@@ -5,9 +5,10 @@ import { fileURLToPath } from 'url'
 import needle from 'needle'
 import { pipeline } from 'stream/promises'
 import { Transform } from 'stream'
-import { compareVersion } from '../utils/version.js'
+import { compareVersion, getAppVersion } from '../utils/version.js'
 import { getAppLogInfo, readLogTail } from '../utils/appPaths.js'
 import { peekFpkUpdateDir, getFpkUpdateDir } from '../utils/fpkUpdatePath.js'
+import { maybeAutoBackupOnUpdate } from '../utils/autoUserBackup.js'
 import { requireAdmin } from '../middleware/auth.js'
 import { broadcast } from '../ws.js'
 import os from 'os'
@@ -522,6 +523,16 @@ aboutRouter.get('/', async (_req, res) => {
   const updateAvailable = Boolean(latestVersion && compareVersion(latestVersion, currentVersion) > 0)
   const logInfo = getAppLogInfo()
 
+  let autoBackup = null
+  if (updateAvailable) {
+    try {
+      autoBackup = maybeAutoBackupOnUpdate({ currentVersion, latestVersion })
+    } catch (e) {
+      autoBackup = { ok: false, skipped: true, reason: e?.message || 'backup-failed' }
+      console.warn('[backup] 关于页触发自动备份失败:', e?.message || e)
+    }
+  }
+
   res.json({
     name: 'Lemon Music',
     displayName: '柠檬音乐下载',
@@ -535,6 +546,15 @@ aboutRouter.get('/', async (_req, res) => {
     currentVersion,
     latestVersion,
     updateAvailable,
+    autoBackup: autoBackup
+      ? {
+          ok: Boolean(autoBackup.ok),
+          skipped: Boolean(autoBackup.skipped),
+          reason: autoBackup.reason || undefined,
+          fileName: autoBackup.fileName || undefined,
+          filePath: autoBackup.filePath || undefined,
+        }
+      : null,
     releaseUrl,
     releaseName,
     releaseNotes,

@@ -28,6 +28,11 @@ import {
   setPathsAccessPolicy,
   normalizePathsAccessPolicy,
 } from '../utils/filePaths.js'
+import {
+  getDownloadAllowed,
+  setDownloadAllowed,
+  isDownloadAllowedForUser,
+} from '../utils/downloadPermission.js'
 import { requireAdmin, requireAuth } from '../middleware/auth.js'
 import { createAuthToken, consumeAuthToken } from '../utils/authTokens.js'
 import { setAuthCookie, clearAuthCookie } from '../utils/authCookie.js'
@@ -300,31 +305,46 @@ authRouter.post('/change-password', requireAuth, (req, res) => {
   }
 })
 
-function withDownloadPathPolicy(user) {
+function withUserAccessFlags(user) {
   if (!user) return user
   const publicUser = toPublicUser(user)
   const policy = getDownloadPathPolicy(publicUser.id)
+  const allowDownload = isDownloadAllowedForUser(publicUser)
   return {
     ...publicUser,
     downloadPathPolicy: policy,
     pathsAccessPolicy: policy,
+    allowDownload,
+    downloadAllowed: allowDownload,
   }
+}
+
+/** @deprecated 使用 withUserAccessFlags */
+function withDownloadPathPolicy(user) {
+  return withUserAccessFlags(user)
 }
 
 authRouter.get('/users', requireAuth, requireAdmin, (_req, res) => {
   res.json({ users: listUsers().map((u) => {
     const policy = getDownloadPathPolicy(u.id)
+    const allowDownload = u.role === 'admin' ? true : getDownloadAllowed(u.id)
     return {
       ...u,
       downloadPathPolicy: policy,
       pathsAccessPolicy: policy,
+      allowDownload,
+      downloadAllowed: allowDownload,
     }
   }) })
 })
 
 authRouter.post('/users', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { username, password, displayName, role, email, downloadPathPolicy, pathsAccessPolicy } = req.body || {}
+    const {
+      username, password, displayName, role, email,
+      downloadPathPolicy, pathsAccessPolicy,
+      allowDownload, downloadAllowed,
+    } = req.body || {}
     const user = createUser({
       username,
       password,
@@ -333,7 +353,13 @@ authRouter.post('/users', requireAuth, requireAdmin, async (req, res) => {
     })
     const policy = normalizePathsAccessPolicy(pathsAccessPolicy || downloadPathPolicy)
     setPathsAccessPolicy(user.id, policy)
-    res.json({ ok: true, user: withDownloadPathPolicy(user), verificationSent: false })
+    if (user.role !== 'admin') {
+      const allowed = allowDownload != null ? allowDownload : downloadAllowed
+      setDownloadAllowed(user.id, allowed != null ? allowed : true)
+    } else {
+      setDownloadAllowed(user.id, true)
+    }
+    res.json({ ok: true, user: withUserAccessFlags(user), verificationSent: false })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }
@@ -372,7 +398,13 @@ authRouter.patch('/users/:id', requireAuth, requireAdmin, (req, res) => {
     if (req.body?.downloadPathPolicy != null || req.body?.pathsAccessPolicy != null) {
       setPathsAccessPolicy(user.id, req.body.pathsAccessPolicy || req.body.downloadPathPolicy)
     }
-    res.json({ ok: true, user: withDownloadPathPolicy(user) })
+    if (req.body?.allowDownload != null || req.body?.downloadAllowed != null) {
+      const allowed = req.body.allowDownload != null ? req.body.allowDownload : req.body.downloadAllowed
+      setDownloadAllowed(user.id, user.role === 'admin' ? true : allowed)
+    } else if (user.role === 'admin') {
+      setDownloadAllowed(user.id, true)
+    }
+    res.json({ ok: true, user: withUserAccessFlags(user) })
   } catch (e) {
     res.status(400).json({ error: e.message })
   }

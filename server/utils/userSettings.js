@@ -59,6 +59,7 @@ export const USER_SETTING_KEYS = new Set([
   'download.usePersonalSavePath',
   'download.savePathPersonal',
   'download.pathPolicy',
+  'download.allowed',
   'paths.accessPolicy',
   'paths.mode',
   'music.pathsPersonal',

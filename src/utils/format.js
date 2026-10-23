@@ -1,5 +1,7 @@
+import { parseDurationSeconds } from './audioDuration.js'
+
 export function formatDuration(seconds) {
-  const n = Number(seconds)
+  const n = parseDurationSeconds(seconds)
   if (!n || !Number.isFinite(n) || n <= 0) return ''
   const total = Math.floor(n)
   const m = Math.floor(total / 60)
@@ -49,9 +51,10 @@ export function formatTrackTags(track, options = {}) {
     const spec = formatAudioSpec(track)
     if (spec) parts.push(spec)
   }
-  const dur = formatDuration(track.duration)
+  const dur = formatDuration(track.duration || track.interval)
   if (dur) parts.push(dur)
-  return parts.join(' · ') || '—'
+  // 无元数据时返回空串，由列表自行隐藏，避免整列占位「—」
+  return parts.join(' · ')
 }
 
 export function formatAlbumTags(album) {

@@ -192,7 +192,7 @@
               class="dl-wrap batch-dl-wrap"
             >
               <button
-                class="btn-primary btn-sm"
+                class="btn-ghost btn-sm"
                 :disabled="!onlineTrackCount || pacedBusy"
                 @click.stop="togglePacedQualityMenu($event)"
               >
@@ -404,7 +404,7 @@
                   class="track-play-count track-play-count--inline"
                 >{{ song.playCount }}次</span>
               </div>
-              <div class="track-tags">{{ formatTrackTags({ ...song, album: '' }, { audioSpec: true }) }}</div>
+              <div v-if="trackTagsText(song)" class="track-tags">{{ trackTagsText(song) }}</div>
             </div>
             <span v-if="isPlayRankSelected" class="track-play-count-col">
               <span
@@ -631,6 +631,7 @@ import {
   setRoamTracks,
   ensureRoamPickPool,
   getPlayRankEntries,
+  resolvePlayRankTrack,
   playStats,
 } from '../stores/library.js'
 import { api } from '../api.js'
@@ -761,12 +762,12 @@ const editingPlaylist = computed(() => getCustomPlaylist(selectedId.value))
 const detailTracks = computed(() => {
   if (!selectedCard.value) return []
   if (!isPlayRankSelected.value) return selectedCard.value.tracks || []
-  // 依赖 playStats，播放后列表即时刷新
+  // 依赖 playStats / 曲库，播放或扫库后列表即时刷新，并正确标记本地
   void playStats.value
-  return getPlayRankEntries(playRankRange.value).map((row) => {
-    const base = snapshotToPlayTrack(row) || row
-    return { ...base, key: row.key, playCount: row.playCount }
-  })
+  void libraryTracks.value
+  return getPlayRankEntries(playRankRange.value)
+    .map((row) => resolvePlayRankTrack(row, libraryTracks.value))
+    .filter(Boolean)
 })
 const trackOrigins = computed(() => countPlaylistTrackOrigins(detailTracks.value))
 const lastRemoteSyncLabel = computed(() => {
@@ -1373,6 +1374,10 @@ function onlineBadgeLabel(song) {
   return label && label !== song.source ? label : '网络'
 }
 
+function trackTagsText(song) {
+  return formatTrackTags({ ...song, album: '' }, { audioSpec: true })
+}
+
 function onPlaylistCreated({ playlist }) {
   showCreateModal.value = false
   selectedId.value = playlist.id
@@ -1937,9 +1942,6 @@ function artistInitial(name) {
 }
 .track-play-count--inline { display: none; }
 .track-play-count--side { margin-left: auto; }
-.track-sub-row {
-  display: flex;
-  align-items: center;
 .track-play-count-col {
   flex-shrink: 0;
   min-width: 3.5em;
@@ -1996,13 +1998,16 @@ function artistInitial(name) {
 }
 .song-cover-btn {
   position: relative;
+  box-sizing: border-box;
   width: 52px;
   height: 52px;
+  min-width: 52px;
+  max-width: 52px;
   padding: 0;
   border: none;
   border-radius: 10px;
   overflow: visible;
-  flex-shrink: 0;
+  flex: 0 0 52px;
   background: var(--bg-elevated);
   cursor: pointer;
 }
@@ -2012,6 +2017,14 @@ function artistInitial(name) {
   border-radius: inherit;
   overflow: hidden;
   background: var(--bg-elevated);
+}
+.song-cover-media :deep(img),
+.song-cover-media :deep(.cover-art),
+.song-cover-media :deep(.cover-art img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 .song-cover-ripple {
   position: absolute;
@@ -2341,6 +2354,9 @@ function artistInitial(name) {
   .song-cover-btn {
     width: 44px;
     height: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    flex: 0 0 44px;
     border-radius: 8px;
   }
   .track-name { font-size: 14px; }
@@ -2349,6 +2365,8 @@ function artistInitial(name) {
   .track-row :deep(.mobile-row-actions) {
     min-width: 0;
   }
+  .track-play-count--inline {
+    display: inline-flex;
     font-size: 11px;
   }
   .track-origin-badge {

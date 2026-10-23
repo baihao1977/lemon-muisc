@@ -743,11 +743,14 @@ export const AVAILABLE_SOURCES = {
   mg: { name: '咪咕', key: 'mg' },
 }
 
-export async function searchMusic(keyword, source, page = 1, limit = 30) {
+export async function searchMusic(keyword, source, page = 1, limit = 30, options = {}) {
   const fn = sdkMap[source]
   if (fn) return fn(keyword, page, limit)
   const { searchPluginMedia } = await import('./sourceManager.js')
-  return searchPluginMedia(source, keyword, page, limit, 'music')
+  const allowedSourceIds = Array.isArray(options?.allowedSourceIds)
+    ? options.allowedSourceIds
+    : null
+  return searchPluginMedia(source, keyword, page, limit, 'music', allowedSourceIds)
 }
 
 const WY_HEADERS = {

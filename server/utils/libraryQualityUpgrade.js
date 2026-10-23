@@ -11,8 +11,9 @@ import { isLosslessQuality } from './audioFormat.js'
 import {
   findCrossPlatformMatch,
   listOnlinePlatforms,
+  listPlatformsForSource,
 } from './crossPlatformMatch.js'
-import { getMergedSources } from '../sourceManager.js'
+import { getActiveSource, getMergedSources } from '../sourceManager.js'
 import { getStoredActiveSourceIds } from './activeSources.js'
 
 export const QUALITY_UPGRADE_PLAYLIST_ID = 'quality-upgrade'
@@ -412,7 +413,57 @@ async function mapPool(items, concurrency, fn) {
 }
 
 /**
+ * 在单个音源下按平台搜；命中可升级目标音质则返回，否则注明「找到歌但无目标音质」。
+ */
+async function matchTrackOnSource({
+  title,
+  artist,
+  localQuality,
+  preferred,
+  exactQuality,
+  userId,
+  sourceId = null,
+}) {
+  const allow = sourceId ? [String(sourceId)] : null
+  const platforms = sourceId
+    ? listPlatformsForSource(userId, sourceId)
+    : listOnlinePlatforms(userId)
+  let sawMatchButNoQuality = false
+
+  for (const plat of platforms) {
+    try {
+      const item = await findCrossPlatformMatch({
+        name: title,
+        singer: artist,
+        artist,
+        platform: plat,
+        allowedSourceIds: allow,
+      })
+      if (!item) continue
+      const target = pickTargetQuality(item, preferred, { exact: exactQuality })
+      if (!target) {
+        sawMatchButNoQuality = true
+        continue
+      }
+      const better = localQuality
+        ? qualityRank(target) < qualityRank(localQuality)
+        : isLosslessQuality(target)
+      if (!better) {
+        sawMatchButNoQuality = true
+        continue
+      }
+      return { item, target, sourceApiId: sourceId || '', sawMatchButNoQuality: false }
+    } catch {
+      // try next platform
+    }
+  }
+  return { item: null, target: '', sourceApiId: '', sawMatchButNoQuality }
+}
+
+/**
  * 将本地曲目匹配到在线可下载的目标（或更高）音质。
+ * 顺序：用户激活列表里的「当前源」先搜各平台；匹配不到目标音质再试其它激活源
+ * （有的源没有母带，有的有）。
  */
 export async function matchQualityUpgradeTracks({
   tracks = [],
@@ -422,8 +473,20 @@ export async function matchQualityUpgradeTracks({
   exactQuality = true,
 } = {}) {
   const preferred = String(preferredQuality || 'flac').trim() || 'flac'
-  const platforms = listOnlinePlatforms(userId)
-  if (!platforms.length) {
+  const activeIds = [...new Set(getStoredActiveSourceIds(userId).map(String).filter(Boolean))]
+  // 「当前源」：运行时正在用的音源优先；否则用激活列表末项（后激活的）
+  const currentId = String(getActiveSource()?.id || '').trim()
+  let sourcePasses = activeIds.length ? activeIds : [null]
+  if (activeIds.length) {
+    const prefer = currentId && activeIds.includes(currentId)
+      ? currentId
+      : activeIds[activeIds.length - 1]
+    sourcePasses = [prefer, ...activeIds.filter((id) => id !== prefer)]
+  }
+  const anyPlatforms = sourcePasses.some((id) => (
+    id ? listPlatformsForSource(userId, id).length : listOnlinePlatforms(userId).length
+  ))
+  if (!anyPlatforms) {
     const err = new Error('当前没有可用音源平台，请先在设置中激活音源')
     err.code = 'NO_ACTIVE_SOURCE'
     throw err
@@ -452,34 +515,31 @@ export async function matchQualityUpgradeTracks({
 
     let bestItem = null
     let bestTarget = ''
+    let bestSourceApiId = ''
     let sawMatchButNoQuality = false
 
-    for (const plat of platforms) {
-      try {
-        const item = await findCrossPlatformMatch({
-          name: title,
-          singer: artist,
+    // 允许降档时：先全源找「目标档」，都没有再全源降档，避免第一个源的普通 flac 挡住其它源的母带
+    const phases = exactQuality ? [true] : [true, false]
+
+    outer:
+    for (const exact of phases) {
+      for (const sourceId of sourcePasses) {
+        const hit = await matchTrackOnSource({
+          title,
           artist,
-          platform: plat,
+          localQuality,
+          preferred,
+          exactQuality: exact,
+          userId,
+          sourceId,
         })
-        if (!item) continue
-        const target = pickTargetQuality(item, preferred, { exact: exactQuality })
-        if (!target) {
-          sawMatchButNoQuality = true
-          continue
+        if (hit.sawMatchButNoQuality) sawMatchButNoQuality = true
+        if (hit.item && hit.target) {
+          bestItem = hit.item
+          bestTarget = hit.target
+          bestSourceApiId = hit.sourceApiId || ''
+          break outer
         }
-        const better = localQuality
-          ? qualityRank(target) < qualityRank(localQuality)
-          : isLosslessQuality(target)
-        if (!better) {
-          sawMatchButNoQuality = true
-          continue
-        }
-        bestItem = item
-        bestTarget = target
-        break
-      } catch {
-        // try next platform
       }
     }
 
@@ -491,7 +551,7 @@ export async function matchQualityUpgradeTracks({
         localQuality,
         localLabel,
         reason: sawMatchButNoQuality
-          ? `已找到同名曲，但未提供优于本地的目标音质 ${wantLabel}`
+          ? `已在多个音源找到同名曲，但均未提供优于本地的目标音质 ${wantLabel}`
           : `未匹配到可升级为 ${wantLabel} 的在线资源`,
       })
       return
@@ -507,6 +567,7 @@ export async function matchQualityUpgradeTracks({
       targetQuality: bestTarget,
       targetLabel: qualityLabel(bestTarget) || bestTarget,
       source: bestItem.source || '',
+      sourceApiId: bestSourceApiId,
       onlineQualities: declared,
       qualityDeclared: declared.includes(bestTarget),
       onlineItem: bestItem,
@@ -561,6 +622,8 @@ export function buildUpgradeDownloadTasks(matchedRows, {
       qualityPolicy: policy,
       qualityFloor: strategy === 'floor' ? (floorQuality || '') : '',
       autoCascade: policy === 'cascade',
+      // 匹配阶段命中的音源优先取链；失败时下载队列仍可换其它激活源
+      sourceApiId: row.sourceApiId || '',
       replacePath: row.filePath,
       forceOverwrite: true,
       listName: '音质升级',

@@ -459,6 +459,8 @@ attach_persist_modules() {
   fi
 
   # APP 侧挂接：软链 → 硬拷（部分卷不支持软链）
+  # 注意：npm 会把指向 persist 的软链当成 non-directory 删掉，再装到实体 ./node_modules；
+  # 此时必须以这次安装结果覆盖持久区，绝不能删掉新装再链回旧 persist（否则 axios 等永远装不上）。
   if [ -L "${root}/node_modules" ]; then
     local cur
     cur="$(readlink "${root}/node_modules" 2>/dev/null || true)"
@@ -467,13 +469,14 @@ attach_persist_modules() {
     fi
     rm -f "${root}/node_modules" 2>/dev/null || true
   elif [ -d "${root}/node_modules" ]; then
-    # 已是实体目录且齐全：仍迁到持久区再挂接，避免下次升级丢失
     if has_core_modules "${root}/node_modules" && [ "${root}/node_modules" != "${persist}" ]; then
-      if ! has_core_modules "${persist}"; then
-        rm -rf "${persist}" 2>/dev/null || true
-        mv "${root}/node_modules" "${persist}" 2>/dev/null \
-          || { mkdir -p "${persist}"; cp -a "${root}/node_modules/." "${persist}/"; rm -rf "${root}/node_modules"; }
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] 以 APP 实体 node_modules 覆盖持久目录 ${persist}" >> "${log_file}"
+      rm -rf "${persist}" 2>/dev/null || true
+      if mv "${root}/node_modules" "${persist}" 2>/dev/null; then
+        :
       else
+        mkdir -p "${persist}" 2>/dev/null || true
+        cp -a "${root}/node_modules/." "${persist}/" 2>/dev/null || true
         rm -rf "${root}/node_modules" 2>/dev/null || true
       fi
     else
@@ -578,21 +581,26 @@ install_node_modules() {
     prepare_npm_env
     (
       cd "${root}" || exit 1
-      # 保证安装落到 APP/node_modules（已是持久目录的软链或实体）
-      if [ ! -e "${root}/node_modules" ]; then
-        mkdir -p "${persist}" && ln -sfn "${persist}" "${root}/node_modules" 2>/dev/null \
-          || mkdir -p "${root}/node_modules"
+      # npm 不接受 symlink node_modules（会 Removing non-directory）；先拆软链，必要时从 persist 灌一份再增量装
+      if [ -L "${root}/node_modules" ]; then
+        rm -f "${root}/node_modules"
       fi
+      if [ ! -d "${root}/node_modules/express" ] && has_core_modules "${persist}"; then
+        mkdir -p "${root}/node_modules"
+        cp -a "${persist}/." "${root}/node_modules/" 2>/dev/null || true
+      fi
+      mkdir -p "${root}/node_modules"
       run_npm_with_timeout "${npm_bin}" "${log_file}" install --omit=dev --ignore-scripts --no-audit --no-fund
     ) || true
     attach_persist_modules || true
-    if has_core_modules "${root}/node_modules"; then
+    if has_core_modules "${root}/node_modules" \
+      && [ -d "${root}/node_modules/axios" ] && [ -d "${root}/node_modules/cheerio" ]; then
       echo "${fp}" > "${stamp}" 2>/dev/null || true
       echo "[$(date '+%Y-%m-%d %H:%M:%S')] 增量 npm install ok" >> "${log_file}"
       update_npm_ui "依赖增量更新完成"
       return 0
     fi
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 增量安装后核心模块仍异常，尝试全量安装" >> "${log_file}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 增量安装后仍缺核心/axios/cheerio，尝试全量安装" >> "${log_file}"
   fi
 
   npm_bin="$(resolve_npm_bin)" || return 1

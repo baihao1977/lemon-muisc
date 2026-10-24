@@ -41,7 +41,13 @@ import {
   detectPreviewClip,
   formatPreviewClipMessage,
 } from '../utils/audioDuration.js'
-import { platformLabel, platformShortLabel, PLATFORM_LABELS, platformLabelEpoch } from '../utils/platforms.js'
+import {
+  platformLabel,
+  platformShortLabel,
+  PLATFORM_LABELS,
+  platformLabelEpoch,
+  isMusicFreePlatformKey,
+} from '../utils/platforms.js'
 import { searchState } from './search.js'
 import { discoverState } from './discover.js'
 import { QUALITY_LABELS, QUALITY_ORDER, getQualityLabel } from '../utils/quality.js'
@@ -2395,6 +2401,11 @@ function trackNameArtistScore(candidate, name, artist) {
   return score
 }
 
+/** MusicFree 分片平台勿与内置 tx/wy 等互搜，否则会误播成歌 */
+function shouldSkipCrossPlatformMatch(fromSource, toPlatform) {
+  return isMusicFreePlatformKey(fromSource) || isMusicFreePlatformKey(toPlatform)
+}
+
 async function findCrossPlatformMatch(item, platform) {
   const name = String(item?.name || '').trim()
   const artist = String(item?.singer || item?.artist || '').trim()
@@ -2566,6 +2577,8 @@ async function autoSwitchFromPreview(item, source, failedSourceId) {
         currentPlatform: source,
         onlyCurrent: !crossPlatformSupplement.value,
       })
+      // MusicFree：其它音源未声明该 mf 平台时返回 []，跳过，避免回退成内置平台乱搜
+      if (!platforms.length && isMusicFreePlatformKey(source)) continue
       const platformsToTry = platforms.length ? platforms : [source].filter(Boolean)
 
       for (const plat of platformsToTry) {
@@ -2576,6 +2589,7 @@ async function autoSwitchFromPreview(item, source, failedSourceId) {
         let playItem = item
         let playSource = source
         if (plat !== source) {
+          if (shouldSkipCrossPlatformMatch(source, plat)) continue
           const match = await findCrossPlatformMatch(item, plat)
           if (!match) continue
           playItem = match
@@ -4110,6 +4124,8 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0, 
           currentPlatform: source,
           onlyCurrent: !crossPlatformSupplement.value,
         })
+        // MusicFree：其它音源未声明该 mf 平台时返回 []，跳过，避免回退成内置平台乱搜
+        if (!platforms.length && isMusicFreePlatformKey(source)) continue
         const platformsToTry = platforms.length ? platforms : [source].filter(Boolean)
 
         for (let pi = 0; pi < platformsToTry.length; pi++) {
@@ -4119,6 +4135,7 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0, 
           let playItem = enrichedItem
           let playSource = source
           if (plat !== source) {
+            if (shouldSkipCrossPlatformMatch(source, plat)) continue
             if (qi === 0 && si === 0 && pi === 1) {
               showPlayerNotice('当前平台无此音质，正在同源跨平台查找…', 8000)
             }
@@ -4217,6 +4234,10 @@ export async function playTrackAt(index, { fromHistory = false, resumeTime = 0, 
           playNextAutoDepth = Math.max(0, playNextAutoDepth - 1)
         }
         return
+      }
+      // MusicFree 听书等：取链失败时直接提示真实原因，勿让用户以为只是「无音质」
+      if (isMusicFreePlatformKey(source) && message) {
+        showPlayerNotice(message, 8000)
       }
       isPaused.value = true
       playerError.value = message

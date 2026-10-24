@@ -7,7 +7,13 @@ export const searchState = reactive({
   sources: {},
   searchMode: 'song', // song | album | playlist
   viewMode: 'list', // list | album-detail | playlist-detail
+  /** album-detail 来源：普通专辑 | 听书整书 */
+  detailKind: '', // '' | 'album' | 'book'
   results: [],
+  /** 歌曲搜索里拆出的整书（封面卡片，点开再看章节） */
+  songBookResults: [],
+  /** 进入听书详情前暂存的歌曲行，返回时还原 */
+  savedSongResults: [],
   albumResults: [],
   albumInfo: null,
   playlistResults: [],

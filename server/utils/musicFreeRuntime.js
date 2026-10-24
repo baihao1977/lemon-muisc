@@ -199,17 +199,34 @@ function formatInterval(sec) {
   return `${m}:${String(r).padStart(2, '0')}`
 }
 
+function looksLikeMusicFreeAlbum(item) {
+  if (!item || typeof item !== 'object') return false
+  if (item.extra?.bookContainer || item.extra?.isAudio === false) return true
+  const works = Number(item.worksNum || item.trackCount || item.tracksCount || 0)
+  if (works > 0 && !(Number(item.duration) > 0)) return true
+  return false
+}
+
 export function mapMusicFreeSearchItem(item, sourceKey, platformName) {
   if (!item || typeof item !== 'object') return null
   const id = String(item.id || item.mid || item.songmid || '')
   if (!id) return null
   const types = typesFromItem(item)
+  let albumId = String(item.albumId || item.extra?.bookId || '')
+  // 专辑/听书容器：补齐 albumId，供前端拆成书卡片
+  if (!albumId && looksLikeMusicFreeAlbum(item)) albumId = id
+  const mfItem = {
+    ...item,
+    platform: item.platform || platformName,
+    ...(albumId ? { albumId } : {}),
+  }
   return {
     id,
     name: item.title || item.name || '',
     singer: item.artist || item.singer || '',
-    album: item.album || '',
-    albumName: item.album || '',
+    album: item.album || item.title || '',
+    albumName: item.album || item.title || '',
+    albumId: albumId || undefined,
     interval: formatInterval(item.duration),
     duration: item.duration || 0,
     source: sourceKey,
@@ -220,7 +237,7 @@ export function mapMusicFreeSearchItem(item, sourceKey, platformName) {
     picUrl: item.artwork || item.picUrl || '',
     types,
     qualitys: types.map((t) => t.type),
-    mfItem: { ...item, platform: item.platform || platformName },
+    mfItem,
   }
 }
 
@@ -253,6 +270,71 @@ async function lyricFromPlugin(plugin, musicItem) {
   return { lyric: String(text || '') }
 }
 
+/**
+ * 听书类 MusicFree 搜索常返回「整本书」（id === albumId，带封面），
+ * 直接 getMediaSource 会因缺少章节 ID 失败。播放前展开为第一章。
+ */
+async function expandBookToChapterIfNeeded(plugin, musicItem, platformName) {
+  if (!musicItem || typeof plugin?.getAlbumInfo !== 'function') return musicItem
+  const id = String(musicItem.id || musicItem.songmid || musicItem.songId || '')
+  const albumId = String(
+    musicItem.albumId
+    || musicItem.extra?.bookId
+    || musicItem.extra?.albumId
+    || '',
+  )
+  const looksLikeBook = Boolean(
+    id
+    && (
+      (albumId && id === albumId)
+      || musicItem.extra?.isAudio === false
+      || musicItem.isAudio === false
+    ),
+  )
+  if (!looksLikeBook) return musicItem
+
+  const bookKey = albumId || id
+  try {
+    const result = await plugin.getAlbumInfo(
+      {
+        id: bookKey,
+        albumId: bookKey,
+        title: musicItem.title || musicItem.name || '',
+        artist: musicItem.artist || musicItem.singer || '',
+        artwork: musicItem.artwork || musicItem.img || musicItem.picUrl || '',
+        platform: platformName,
+        extra: musicItem.extra || {},
+      },
+      1,
+    )
+    const list = Array.isArray(result?.musicList)
+      ? result.musicList
+      : (Array.isArray(result?.list) ? result.list : [])
+    const chapter = list.find((ch) => {
+      const cid = String(ch?.id || '')
+      return cid && cid !== bookKey
+    }) || list[0]
+    if (!chapter?.id) return musicItem
+    return {
+      ...musicItem,
+      ...chapter,
+      id: String(chapter.id),
+      albumId: String(chapter.albumId || bookKey),
+      title: chapter.title || musicItem.title || musicItem.name || '',
+      artist: chapter.artist || musicItem.artist || musicItem.singer || '',
+      artwork: chapter.artwork || musicItem.artwork || musicItem.img || '',
+      platform: platformName || musicItem.platform || '',
+      extra: {
+        ...(musicItem.extra || {}),
+        ...(chapter.extra || {}),
+        bookId: bookKey,
+      },
+    }
+  } catch {
+    return musicItem
+  }
+}
+
 export function createMusicFreeHandler(plugin) {
   const platformName = String(plugin.platform || '').trim()
   return async ({ action, info = {} }) => {
@@ -261,10 +343,11 @@ export function createMusicFreeHandler(plugin) {
 
     if (action === 'musicUrl') {
       if (typeof plugin.getMediaSource !== 'function') throw new Error('该插件不支持获取播放链接')
+      const playItem = await expandBookToChapterIfNeeded(plugin, musicItem, platformName)
       let lastErr = null
       for (const q of qualitiesToTry(quality)) {
         try {
-          const result = await plugin.getMediaSource(musicItem, q)
+          const result = await plugin.getMediaSource(playItem, q)
           const url = result?.url || (typeof result === 'string' ? result : '')
           if (url) {
             if (result && typeof result === 'object') return result
@@ -426,8 +509,10 @@ function createAxiosInstance() {
   return instance
 }
 
-export function createPluginEnv() {
-  const userVariables = {}
+export function createPluginEnv(initialVariables = {}) {
+  const userVariables = {
+    ...(initialVariables && typeof initialVariables === 'object' ? initialVariables : {}),
+  }
   return {
     os: process.platform,
     appVersion: '1.2.17',
@@ -436,6 +521,33 @@ export function createPluginEnv() {
     getUserVariables() {
       return { ...userVariables }
     },
+    setUserVariables(next = {}) {
+      if (!next || typeof next !== 'object') return
+      for (const [k, v] of Object.entries(next)) {
+        if (v == null) delete userVariables[k]
+        else userVariables[k] = String(v)
+      }
+    },
+  }
+}
+
+/**
+ * 部分万象插件把 userVariables.toneId 写成全局 getToneId()（MusicFree 桌面端并无此全局）。
+ * 发音人可选：未配置时返回空字符串，由插件后端自动适配。
+ */
+export function createMusicFreeUserVarHelpers(env) {
+  const read = (key) => {
+    try {
+      const vars = env?.getUserVariables?.() || env?.userVariables || {}
+      const v = vars?.[key]
+      return v == null ? '' : String(v)
+    } catch {
+      return ''
+    }
+  }
+  return {
+    getToneId: () => read('toneId') || read('tone_id'),
+    getApiKey: () => read('key') || read('apiKey') || read('api_key'),
   }
 }
 

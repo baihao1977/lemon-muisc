@@ -48,7 +48,9 @@
     </div>
 
     <div v-if="searchState.viewMode === 'album-detail' && searchState.albumInfo" class="album-detail-toolbar">
-      <button class="btn-ghost btn-sm" @click="backToAlbumList">← 返回专辑列表</button>
+      <button class="btn-ghost btn-sm" @click="backToAlbumList">
+        {{ searchState.detailKind === 'book' ? '← 返回书单' : '← 返回专辑列表' }}
+      </button>
     </div>
 
     <div v-if="searchState.viewMode === 'playlist-detail' && searchState.playlistInfo" class="album-detail-toolbar">
@@ -60,11 +62,20 @@
         <CoverArt :src="searchState.albumInfo.img" />
       </div>
       <div class="album-meta">
-        <h2 class="album-name">{{ cleanText(searchState.albumInfo.name) || '未命名专辑' }}</h2>
+        <h2 class="album-name">
+          {{ cleanText(searchState.albumInfo.name) || (searchState.detailKind === 'book' ? '未命名书籍' : '未命名专辑') }}
+        </h2>
         <div class="album-tags">
-          <span v-if="searchState.albumInfo.author">歌手：{{ cleanText(searchState.albumInfo.author) }}</span>
-          <span v-if="searchState.albumInfo.publishTime">发行：{{ searchState.albumInfo.publishTime }}</span>
-          <span>共 {{ searchState.results.length }} 首</span>
+          <span v-if="searchState.albumInfo.author">
+            {{ searchState.detailKind === 'book' ? '作者' : '歌手' }}：{{ cleanText(searchState.albumInfo.author) }}
+          </span>
+          <span v-if="searchState.albumInfo.publishTime && searchState.detailKind !== 'book'">
+            发行：{{ searchState.albumInfo.publishTime }}
+          </span>
+          <span>
+            共 {{ searchState.results.length }}
+            {{ searchState.detailKind === 'book' ? '章' : '首' }}
+          </span>
         </div>
         <p v-if="searchState.albumInfo.desc" class="album-desc">{{ cleanText(searchState.albumInfo.desc) }}</p>
       </div>
@@ -171,6 +182,46 @@
       <div v-else class="empty album-hint">输入歌单名或关键词后搜索</div>
     </div>
 
+    <div v-if="showSongBookGrid" class="album-results card">
+      <div v-if="searchState.albumLoading && searchState.detailKind === 'book'" class="album-loading">正在打开书籍章节...</div>
+      <template v-else>
+        <div class="results-toolbar book-grid-toolbar">
+          <span class="results-count">听书 · 共 {{ searchState.songBookResults.length }} 本（点开查看章节）</span>
+        </div>
+        <div class="album-grid">
+          <button
+            v-for="item in searchState.songBookResults"
+            :key="`book-${item.source}-${item.id}`"
+            class="album-card"
+            type="button"
+            :title="'打开章节：' + cleanText(item.name)"
+            @click="openBook(item)"
+          >
+            <div class="album-card-cover-wrap">
+              <CoverArt :src="item.img || item.picUrl" />
+              <span class="album-card-badge">听书</span>
+            </div>
+            <div class="album-card-meta">
+              <div class="album-card-name" :title="cleanText(item.name)">{{ cleanText(item.name) }}</div>
+              <div class="album-card-artist" :title="cleanText(item.singer || item.artist)">
+                {{ cleanText(item.singer || item.artist) || '未知作者' }}
+              </div>
+              <div class="album-card-stats">
+                <span>查看章节</span>
+              </div>
+            </div>
+          </button>
+        </div>
+        <ListPager
+          v-if="!showSongResults && searchState.totalPages > 1"
+          v-model:page="searchState.page"
+          :total-pages="searchState.totalPages"
+          :show-size="false"
+          @change-page="doSearch"
+        />
+      </template>
+    </div>
+
     <div v-if="showSongHintCard" class="album-results card">
       <div v-if="searchState.loading" class="album-loading">正在搜索歌曲...</div>
       <div v-else-if="searchState.searched" class="empty">暂无搜索结果</div>
@@ -178,14 +229,21 @@
     </div>
 
     <div v-else-if="showDetailTrackEmpty" class="album-results card">
-      <div v-if="searchState.loading || searchState.playlistLoading" class="album-loading">正在加载歌曲...</div>
-      <div v-else class="empty">暂无歌曲</div>
+      <div v-if="searchState.loading || searchState.playlistLoading || searchState.albumLoading" class="album-loading">
+        {{ searchState.detailKind === 'book' ? '正在加载章节...' : '正在加载歌曲...' }}
+      </div>
+      <div v-else class="empty">{{ searchState.detailKind === 'book' ? '暂无章节' : '暂无歌曲' }}</div>
     </div>
 
     <div class="results card" v-if="showSongResults">
       <div class="results-toolbar">
         <span class="results-count">
-          共 {{ searchState.viewMode === 'playlist-detail' ? (searchState.playlistTotal || searchState.results.length) : searchState.results.length }} 首
+          共 {{
+            searchState.viewMode === 'playlist-detail'
+              ? (searchState.playlistTotal || searchState.results.length)
+              : searchState.results.length
+          }}
+          {{ searchState.detailKind === 'book' ? '章' : '首' }}
           <template v-if="showPagination"> · 第 {{ albumTrackPage }}/{{ albumTrackTotalPages }} 页</template>
           <template v-if="searchState.viewMode === 'playlist-detail' && searchState.playlistLoadingMore"> · 加载剩余歌曲...</template>
           <template v-if="selectedCount"> · 已选 {{ selectedCount }}</template>
@@ -404,6 +462,7 @@ import { loadingPlay, isPaused, isPlayingItem, playItem, addToQueue, isInQueue }
 import { getQualityLabel } from '../utils/quality.js'
 import { platformLabel } from '../utils/platforms.js'
 import { cleanText, cleanTrackItem } from '../utils/text.js'
+import { getAudiobookAlbumId, splitAudiobookSearchResults } from '../utils/audiobook.js'
 import {
   trackSelectKey,
   buildDownloadTask,
@@ -446,7 +505,10 @@ function resolveSearchPacedJobId() {
 
 function searchPacedJobName() {
   if (searchState.viewMode === 'playlist-detail') return cleanText(searchState.playlistInfo?.name) || '歌单'
-  if (searchState.viewMode === 'album-detail') return cleanText(searchState.albumInfo?.name) || '专辑'
+  if (searchState.viewMode === 'album-detail') {
+    if (searchState.detailKind === 'book') return cleanText(searchState.albumInfo?.name) || '听书'
+    return cleanText(searchState.albumInfo?.name) || '专辑'
+  }
   return '批量下载'
 }
 
@@ -541,6 +603,11 @@ const isSearching = computed(() => {
 const showAlbumGrid = computed(() =>
   searchState.searchMode === 'album' && searchState.viewMode !== 'album-detail',
 )
+const showSongBookGrid = computed(() =>
+  searchState.searchMode === 'song'
+  && searchState.viewMode === 'list'
+  && searchState.songBookResults.length > 0,
+)
 const showPlaylistGrid = computed(() =>
   searchState.searchMode === 'playlist' && searchState.viewMode !== 'playlist-detail',
 )
@@ -580,7 +647,8 @@ const showSongHintCard = computed(() =>
   searchState.searchMode === 'song'
   && searchState.viewMode !== 'album-detail'
   && searchState.viewMode !== 'playlist-detail'
-  && !showSongResults.value,
+  && !showSongResults.value
+  && !showSongBookGrid.value,
 )
 const showDetailTrackEmpty = computed(() =>
   (searchState.viewMode === 'album-detail' || searchState.viewMode === 'playlist-detail')
@@ -802,8 +870,11 @@ function switchSearchMode(mode) {
   if (searchState.searchMode === mode) return
   searchState.searchMode = mode
   searchState.viewMode = 'list'
+  searchState.detailKind = ''
   searchState.page = 1
   searchState.results = []
+  searchState.songBookResults = []
+  searchState.savedSongResults = []
   searchState.albumResults = []
   searchState.albumInfo = null
   searchState.playlistResults = []
@@ -821,10 +892,13 @@ function switchSource(key) {
   searchState.activeSource = key
   searchState.page = 1
   searchState.viewMode = 'list'
+  searchState.detailKind = ''
   searchState.albumInfo = null
   searchState.playlistInfo = null
   searchState.playlistImportId = ''
   searchState.results = []
+  searchState.songBookResults = []
+  searchState.savedSongResults = []
   searchState.albumResults = []
   searchState.playlistResults = []
   searchState.playlistTotal = 0
@@ -895,6 +969,11 @@ async function doSearch() {
 
   searchState.loading = true
   searchState.searched = true
+  searchState.viewMode = 'list'
+  searchState.detailKind = ''
+  searchState.albumInfo = null
+  searchState.songBookResults = []
+  searchState.savedSongResults = []
   resetAlbumTrackPage()
   clearSelection()
   closeMenus()
@@ -902,20 +981,25 @@ async function doSearch() {
     const res = await api.search.search(keyword, source, page, { signal: controller.signal })
     if (seq !== searchSeq || source !== searchState.activeSource) return
     const data = res.data
+    let list = []
     if (Array.isArray(data)) {
-      searchState.results = data.map(cleanTrackItem)
+      list = data.map(cleanTrackItem)
       searchState.totalPages = 1
     } else if (data?.list) {
-      searchState.results = data.list.map(cleanTrackItem)
+      list = data.list.map(cleanTrackItem)
       searchState.totalPages = data.allPage || data.totalPage || 1
     } else {
-      searchState.results = []
+      list = []
       searchState.totalPages = 1
     }
+    const { books, songs } = splitAudiobookSearchResults(list)
+    searchState.songBookResults = books
+    searchState.results = songs
   } catch (e) {
     if (isAbortedError(e)) return
     if (seq !== searchSeq) return
     searchState.results = []
+    searchState.songBookResults = []
     searchState.totalPages = 1
     showToast(e.message, 'error')
   } finally {
@@ -969,6 +1053,7 @@ async function openAlbum(item) {
   const source = item.source || searchState.activeSource
 
   searchState.albumLoading = true
+  searchState.detailKind = 'album'
   clearSelection()
   closeMenus()
   try {
@@ -987,6 +1072,7 @@ async function openAlbum(item) {
   } catch (e) {
     if (isAbortedError(e)) return
     if (seq !== searchSeq) return
+    searchState.detailKind = ''
     showToast(e.message, 'error')
   } finally {
     if (albumOpenAbort === controller) albumOpenAbort = null
@@ -994,10 +1080,65 @@ async function openAlbum(item) {
   }
 }
 
+/** 听书整书：拉章节列表，进与专辑相同的详情页 */
+async function openBook(item) {
+  const bookId = getAudiobookAlbumId(item) || String(item?.id || '')
+  if (!bookId) return
+
+  cancelAlbumOpen()
+  const controller = new AbortController()
+  albumOpenAbort = controller
+  const seq = ++searchSeq
+  const source = item.source || searchState.activeSource
+
+  searchState.savedSongResults = [...searchState.results]
+  searchState.albumLoading = true
+  searchState.detailKind = 'book'
+  clearSelection()
+  closeMenus()
+  try {
+    const res = await api.search.fetchAlbum(source, bookId, { signal: controller.signal })
+    if (seq !== searchSeq) return
+    const data = res.data
+    searchState.albumInfo = {
+      ...(data?.info || {}),
+      name: data?.info?.name || item.name,
+      img: data?.info?.img || item.img || item.picUrl,
+      author: data?.info?.author || item.singer || item.artist || '',
+      desc: data?.info?.desc || '',
+      id: bookId,
+    }
+    const chapters = (data?.list || []).map(cleanTrackItem)
+    searchState.results = chapters
+    searchState.viewMode = 'album-detail'
+    resetAlbumTrackPage()
+    if (!chapters.length) {
+      showToast('该书暂无章节', 'info')
+    }
+  } catch (e) {
+    if (isAbortedError(e)) return
+    if (seq !== searchSeq) return
+    searchState.detailKind = ''
+    searchState.results = searchState.savedSongResults || []
+    searchState.savedSongResults = []
+    showToast(e.message || '打开书籍失败', 'error')
+  } finally {
+    if (albumOpenAbort === controller) albumOpenAbort = null
+    if (seq === searchSeq) searchState.albumLoading = false
+  }
+}
+
 function backToAlbumList() {
+  const wasBook = searchState.detailKind === 'book'
   searchState.viewMode = 'list'
   searchState.albumInfo = null
-  searchState.results = []
+  searchState.detailKind = ''
+  if (wasBook) {
+    searchState.results = searchState.savedSongResults || []
+    searchState.savedSongResults = []
+  } else {
+    searchState.results = []
+  }
   clearSelection()
   closeMenus()
 }
@@ -1421,11 +1562,28 @@ function showToast(text, type = 'info') {
   border-color: var(--accent);
 }
 .album-card-cover-wrap {
+  position: relative;
   flex-shrink: 0;
   width: 72px;
   height: 72px;
   border-radius: 8px;
   overflow: hidden;
+}
+.album-card-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  z-index: 1;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: color-mix(in srgb, var(--accent, #3d8bfd) 88%, #000);
+  pointer-events: none;
+}
+.book-grid-toolbar {
+  margin-bottom: 10px;
 }
 .album-card-meta { min-width: 0; flex: 1; }
 .album-card-name {

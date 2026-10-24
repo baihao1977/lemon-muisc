@@ -7,9 +7,9 @@
 
 | 维度 | 说明 |
 |------|------|
-| 定位 | NAS 个人音乐整理工具，兼容落雪音乐（LX Music）自定义音源脚本 |
+| 定位 | NAS 个人音乐整理工具，兼容落雪 / 澜音 / MusicFree / BakaMusic 音源插件 |
 | 部署形态 | 飞牛 FPK 原生应用（不依赖 Docker），默认端口 7983；亦可本地开发运行 |
-| 音源体系 | 内置 `musicSdk.js` 直连平台接口 + 用户导入的落雪/澜音脚本沙箱运行时 |
+| 音源体系 | 内置 `musicSdk.js` 直连平台接口 + 用户导入的落雪/澜音/MusicFree/BakaMusic 插件沙箱运行时 |
 | 仓库 | https://github.com/jia070310/lemon-muisc |
 
 ## 2. 技术栈

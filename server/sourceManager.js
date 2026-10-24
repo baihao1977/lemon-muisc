@@ -16,6 +16,7 @@ import {
   normalizeMusicFreeSources,
   createMusicFreeHandler,
   createPluginEnv,
+  createMusicFreeUserVarHelpers,
   createMusicFreeModules,
   mapMusicFreeSearchResult,
   mapMusicFreeSearchItem,
@@ -176,6 +177,8 @@ export async function loadSource(id, script) {
 
     const moduleExports = {}
     const pluginModules = createMusicFreeModules({ pluginId: id })
+    const pluginEnv = createPluginEnv()
+    const userVarHelpers = createMusicFreeUserVarHelpers(pluginEnv)
     const sandbox = {
       lx: lxApi,
       cerumusic: createCerumusicApi(),
@@ -202,6 +205,8 @@ export async function loadSource(id, script) {
       Response,
       Buffer,
       JSON,
+      // 万象等插件误用的全局：从 env.userVariables 读取（发音人可选，缺省为空）
+      getToneId: userVarHelpers.getToneId,
       Promise,
       Object,
       Array,
@@ -247,7 +252,7 @@ export async function loadSource(id, script) {
       escape,
       unescape,
       require: createSandboxRequire(pluginModules),
-      env: createPluginEnv(),
+      env: pluginEnv,
       axios: pluginModules.axios,
       module: { exports: moduleExports },
       exports: moduleExports,
@@ -464,15 +469,37 @@ export function hasPluginSource(sourceKey, allowedSourceIds = null) {
   return Boolean(findPluginEntry(sourceKey, allowedSourceIds))
 }
 
+/** lx 脚本用 qs，MusicFree 分片用 mf* + 平台名「汽水」——按名称回退匹配 */
+const PLUGIN_PLATFORM_ALIAS = {
+  qs: /汽水|qishui|douyin|抖音音乐/i,
+  bili: /bilibili|哔哩|^b站$|b站/i,
+  ytb: /youtube|ytb/i,
+  xm: /喜马拉雅|ximalaya/i,
+}
+
 function findPluginEntry(sourceKey, allowedSourceIds = null) {
   const allow = Array.isArray(allowedSourceIds)
     ? new Set(allowedSourceIds.map(String))
     : null
   const list = [...activeSources.values()].reverse()
-  return list.find((entry) => {
+  const exact = list.find((entry) => {
     if (entry?.runtime !== 'musicfree' || !entry.plugin) return false
     if (allow && !allow.has(entry.id)) return false
     return Boolean(entry.sources?.[sourceKey])
+  })
+  if (exact) return exact
+
+  const alias = PLUGIN_PLATFORM_ALIAS[String(sourceKey || '').trim()]
+  if (!alias) return null
+  return list.find((entry) => {
+    if (entry?.runtime !== 'musicfree' || !entry.plugin) return false
+    if (allow && !allow.has(entry.id)) return false
+    if (typeof entry.plugin.search !== 'function') return false
+    const names = [
+      entry.plugin.platform,
+      ...Object.values(entry.sources || {}).map((s) => s?.name),
+    ].filter(Boolean)
+    return names.some((n) => alias.test(String(n)))
   }) || null
 }
 
@@ -497,9 +524,26 @@ function rethrowPluginSearchError(err) {
 /** MusicFree / BakaMusic 插件搜索（type: music | album | sheet） */
 export async function searchPluginMedia(sourceKey, keyword, page = 1, limit = 30, type = 'music', allowedSourceIds = null) {
   const entry = findPluginEntry(sourceKey, allowedSourceIds)
-  if (!entry) throw new Error('没有可用的插件音源')
+  if (!entry) {
+    const key = String(sourceKey || '').trim()
+    if (PLUGIN_PLATFORM_ALIAS[key]) {
+      const tip = key === 'qs'
+        ? '汽水需另激活 MusicFree「汽水」插件才能搜索（如「卍-汽水」）；星海源仅提供播放取链'
+        : `「${key}」需另激活对应 MusicFree 插件才能搜索；当前音源仅提供播放取链`
+      throw new Error(tip)
+    }
+    throw new Error('没有可用的插件音源')
+  }
   if (typeof entry.plugin.search !== 'function') throw new Error('该插件不支持搜索')
-  const platformName = entry.sources?.[sourceKey]?.name || entry.plugin.platform || sourceKey
+  // 别名命中时（请求 qs、插件实际 key 为 mf*）：结果挂到插件自己的平台 key，便于取链
+  const pluginKeys = Object.keys(entry.sources || {}).filter(Boolean)
+  const resultSourceKey = entry.sources?.[sourceKey]
+    ? sourceKey
+    : (pluginKeys[0] || sourceKey)
+  const platformName = entry.sources?.[resultSourceKey]?.name
+    || entry.sources?.[sourceKey]?.name
+    || entry.plugin.platform
+    || sourceKey
   const pageNum = Number(page) || 1
   const kw = String(keyword || '')
   let result
@@ -509,18 +553,49 @@ export async function searchPluginMedia(sourceKey, keyword, page = 1, limit = 30
     rethrowPluginSearchError(e)
   }
   if (type === 'music') {
-    const empty = !Array.isArray(result?.data) || !result.data.length
+    let empty = !Array.isArray(result?.data) || !result.data.length
     if (empty) {
       try {
         const alt = await entry.plugin.search(kw, pageNum, 'song')
-        if (Array.isArray(alt?.data) && alt.data.length) result = alt
+        if (Array.isArray(alt?.data) && alt.data.length) {
+          result = alt
+          empty = false
+        }
       } catch (e) {
         // 主 type 已空：若备用 type 是明确的密钥错误，应抛出而不是吞掉
         const raw = String(e?.message || '')
         if (/密钥|API\s*Key|api.?key|过期|未填写|未配置/i.test(raw)) rethrowPluginSearchError(e)
       }
     }
-    return mapMusicFreeSearchResult(result, sourceKey, platformName, limit)
+    // 喜马拉雅等听书插件：search(music) 固定空，仅支持 album → 回退搜专辑，前端按「书」卡片打开章节
+    if (empty) {
+      try {
+        const albums = await entry.plugin.search(kw, pageNum, 'album')
+        if (Array.isArray(albums?.data) && albums.data.length) {
+          result = {
+            ...albums,
+            data: albums.data.map((item) => {
+              const id = String(item?.id || item?.albumId || '')
+              return {
+                ...item,
+                id,
+                albumId: String(item?.albumId || id),
+                extra: {
+                  ...(item?.extra || {}),
+                  isAudio: false,
+                  bookContainer: true,
+                },
+              }
+            }),
+          }
+          empty = false
+        }
+      } catch (e) {
+        const raw = String(e?.message || '')
+        if (/密钥|API\s*Key|api.?key|过期|未填写|未配置/i.test(raw)) rethrowPluginSearchError(e)
+      }
+    }
+    return mapMusicFreeSearchResult(result, resultSourceKey, platformName, limit)
   }
   const list = Array.isArray(result?.data) ? result.data : []
   const mapped = list.map((item) => ({

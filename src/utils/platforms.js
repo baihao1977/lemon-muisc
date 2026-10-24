@@ -31,6 +31,11 @@ export function isValidPlatformKey(key) {
   return PLATFORM_KEY_RE.test(k)
 }
 
+/** MusicFree 分片平台内部 key（如 mff5766b7d），勿与内置 tx/wy 等互搜 */
+export function isMusicFreePlatformKey(key) {
+  return /^mf[a-f0-9]{6,}$/i.test(String(key || '').trim())
+}
+
 /**
  * 用 /search/sources 等返回的 { key: { name } } 注册可读平台名，
  * 避免播放栏等处只显示内部 key（如 mf53c4f95a）。
@@ -146,5 +151,13 @@ export function serializeSourcePlatformMap(map) {
 export function platformsOfSource(source) {
   const keys = Object.keys(source?.sources || {}).filter((k) => isValidPlatformKey(k))
   if (keys.length) return orderPlatformKeys(keys)
+  // MusicFree 分平台插件未激活时 sources 常为空；勿回退成内置五家，否则会误显示「平台 5/5」
+  const name = String(source?.name || '')
+  const author = String(source?.author || '')
+  if (/万象/i.test(author) || /万象/i.test(name)
+    || /^[卍★☆※].*[-_—－]/.test(name)
+    || /(?:音乐源|音源|插件)[-_—－]/.test(name)) {
+    return []
+  }
   return [...PLATFORM_ORDER]
 }

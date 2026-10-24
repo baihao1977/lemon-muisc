@@ -673,7 +673,7 @@
 
       <!-- 音源管理 -->
       <div v-if="activeTab === 'source'" class="panel-body">
-        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪兼容 / 澜音原生 .js）。每个账号的激活状态相互独立；点「平台」可单独开关该音源支持的平台。若某平台近期多为试听片段，会自动关闭该音源对它的解析。试听 / 下载顺序：当前音源先穷尽其可用平台，再按激活列表切换下一个音源继续查找。</p>
+        <p v-if="isAdminUser" class="source-tip">支持同时激活多个音源（落雪 / 澜音 / MusicFree / BakaMusic）。每个账号的激活状态相互独立；点「平台」可单独开关该音源支持的平台。若某平台近期多为试听片段，会自动关闭该音源对它的解析。试听 / 下载顺序：当前音源先穷尽其可用平台，再按激活列表切换下一个音源继续查找。</p>
         <p v-else class="source-tip">音源脚本由管理员导入。你可以自行激活或停用音源，并点「平台」单独开关各平台（仅对自己生效）。某平台被检测为多为试听时会自动关闭解析。试听 / 下载按「当前源各平台 → 下一激活源各平台」查找；列表旁的健康标注来自本机近期播放/下载。</p>
         <div v-if="isAdminUser" class="setting-item">
           <div class="setting-item-info">
@@ -739,107 +739,102 @@
           <span v-if="sourceUpdateSummary" class="hint">{{ sourceUpdateSummary }}</span>
         </div>
 
-        <div class="source-list" v-if="sourceList.length">
+        <div class="source-list" v-if="sourceDisplayRows.length">
           <div
-            v-for="s in sourceList"
-            :key="s.id"
+            v-for="row in sourceDisplayRows"
+            :key="row.id"
             class="source-item"
             :class="{
-              active: isSourceActive(s.id),
-              selected: isSourceSelected(s.id),
-              unhealthy: s.health?.unhealthy,
-              'health-mixed': s.health?.unhealthy && s.health?.level === 'mixed',
-              'health-preview': s.health?.unhealthy && s.health?.level === 'preview',
-              'platform-open': expandedSourceId === s.id,
+              active: isDisplayRowActive(row),
+              selected: isDisplayRowSelected(row),
+              unhealthy: displayRowUnhealthy(row),
+              'health-mixed': displayRowHealthLevel(row) === 'mixed',
+              'health-preview': displayRowHealthLevel(row) === 'preview',
+              'platform-open': expandedSourceId === row.id,
+              'is-source-group': row.type === 'group',
             }"
           >
             <div class="source-item-main">
               <label class="source-check" @click.stop>
                 <input
                   type="checkbox"
-                  :checked="isSourceSelected(s.id)"
-                  @change="toggleSourceSelected(s.id)"
+                  :checked="isDisplayRowSelected(row)"
+                  @change="toggleDisplayRowSelected(row)"
                 />
               </label>
               <div class="source-info">
                 <div class="source-name-row">
-                  <span class="source-name">{{ s.name }}</span>
+                  <span class="source-name">{{ row.name }}</span>
+                  <span v-if="row.type === 'group'" class="source-group-badge" :title="`含 ${row.members.length} 个平台插件`">合集</span>
                   <span
-                    v-if="s.health?.unhealthy && s.health?.badge"
+                    v-if="displayRowHealthBadge(row)"
                     class="source-health-badge"
-                    :class="s.health.level === 'mixed' ? 'mixed' : 'preview'"
-                    :title="s.health.tip"
-                  >{{ s.health.badge }}</span>
+                    :class="displayRowHealthLevel(row) === 'mixed' ? 'mixed' : 'preview'"
+                    :title="displayRowHealthTip(row)"
+                  >{{ displayRowHealthBadge(row) }}</span>
                   <span
-                    v-if="sourceCanApplyUpdate(s.id)"
+                    v-if="displayRowCanUpdate(row)"
                     class="source-update-badge"
-                    :title="sourceUpdateTip(s.id)"
+                    :title="displayRowUpdateTip(row)"
                   >有更新</span>
                 </div>
-                <span class="source-meta">{{ s.author || '未知作者' }} · v{{ s.version || '?' }}{{ sourceUpdateMap[s.id]?.remoteVersion ? ` → v${sourceUpdateMap[s.id].remoteVersion}` : '' }}{{ isSourceActive(s.id) ? ' · 已激活' : '' }} · {{ sourcePlatformSummary(s) }}</span>
-                <span v-if="sourceUpdateMap[s.id]?.log" class="source-update-log">{{ sourceUpdateMap[s.id].log }}</span>
-                <span v-if="s.health?.unhealthy && s.health?.tip" class="source-health-tip">{{ s.health.tip }}</span>
-                <span v-if="autoClosedNotice(s)" class="source-autoclose-tip">{{ autoClosedNotice(s) }}</span>
-                <div v-if="s.health?.unhealthy && healthPlatformChips(s).length" class="source-health-platforms">
-                  <span
-                    v-for="p in healthPlatformChips(s)"
-                    :key="p.id"
-                    class="source-plat-chip"
-                    :class="p.level"
-                    :title="platformHealthTitle(p)"
-                  >{{ p.label }}{{ platformHealthSuffix(p) }}</span>
-                </div>
+                <span class="source-meta">{{ displayRowMeta(row) }}</span>
+                <span v-if="displayRowUpdateLog(row)" class="source-update-log">{{ displayRowUpdateLog(row) }}</span>
+                <span v-if="displayRowHealthTip(row)" class="source-health-tip">{{ displayRowHealthTip(row) }}</span>
+                <span v-if="displayRowAutoCloseNotice(row)" class="source-autoclose-tip">{{ displayRowAutoCloseNotice(row) }}</span>
               </div>
               <div class="source-actions">
-                <div class="source-platform-wrap" :class="{ open: expandedSourceId === s.id }">
+                <div class="source-platform-wrap" :class="{ open: expandedSourceId === row.id }">
                   <button
                     type="button"
                     class="source-expand-btn"
-                    :class="{ expanded: expandedSourceId === s.id }"
-                    :data-source-plat="s.id"
-                    :aria-expanded="expandedSourceId === s.id"
-                    :title="expandedSourceId === s.id ? '收起平台开关' : '展开平台开关'"
-                    @click.stop="toggleSourcePlatformPanel(s.id)"
+                    :class="{ expanded: expandedSourceId === row.id }"
+                    :data-source-plat="row.id"
+                    :aria-expanded="expandedSourceId === row.id"
+                    :title="expandedSourceId === row.id ? '收起平台开关' : '展开平台开关'"
+                    @click.stop="toggleSourcePlatformPanel(row.id)"
                   >
                     <span>平台</span>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                   </button>
                 </div>
-                <button v-if="s.health?.unhealthy || autoClosedNotice(s)" class="btn-sm btn-ghost" @click="dismissSourceHealth(s)">知道了</button>
+                <button v-if="displayRowUnhealthy(row) || displayRowAutoCloseNotice(row)" class="btn-sm btn-ghost" @click="dismissDisplayRowHealth(row)">知道了</button>
                 <button
-                  v-if="isAdminUser && sourceCanApplyUpdate(s.id)"
+                  v-if="isAdminUser && displayRowCanUpdate(row)"
                   class="btn-sm btn-primary"
-                  :disabled="sourceBusyId === s.id || sourceUpdatingId === s.id || sourceUpdatingAll || checkingSourceUpdates"
-                  @click="applySourceUpdate(s)"
-                >{{ sourceUpdatingId === s.id ? '更新中…' : '更新' }}</button>
+                  :disabled="isDisplayRowBusy(row) || sourceUpdatingAll || checkingSourceUpdates"
+                  @click="applyDisplayRowUpdate(row)"
+                >{{ isDisplayRowUpdating(row) ? '更新中…' : '更新' }}</button>
                 <button
-                  v-if="!isSourceActive(s.id)"
+                  v-if="!isDisplayRowActive(row)"
                   type="button"
                   class="btn-sm btn-primary"
-                  :disabled="sourceBusyId === s.id || !!sourceBatchBusy || importingUrl || importingFiles"
-                  @click.stop="activateSource(s.id)"
-                >{{ sourceBusyId === s.id ? '激活中…' : '激活' }}</button>
+                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
+                  @click.stop="activateDisplayRow(row)"
+                >{{ isDisplayRowBusy(row) ? '激活中…' : '激活' }}</button>
                 <button
                   v-else
                   type="button"
                   class="btn-sm btn-ghost"
-                  :disabled="sourceBusyId === s.id || !!sourceBatchBusy"
-                  @click.stop="deactivateSource(s.id)"
-                >{{ sourceBusyId === s.id ? '停用中…' : '停用' }}</button>
+                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy"
+                  @click.stop="deactivateDisplayRow(row)"
+                >{{ isDisplayRowBusy(row) ? '停用中…' : (isDisplayRowPartial(row) ? '全部停用' : '停用') }}</button>
                 <button
                   v-if="isAdminUser"
                   class="btn-sm btn-ghost"
                   type="button"
-                  title="保存到下载目录下的「音源导出」文件夹"
-                  :disabled="sourceBusyId === s.id || exportingSourceId === s.id"
-                  @click.stop="exportSource(s)"
-                >{{ exportingSourceId === s.id ? '导出中…' : '导出' }}</button>
+                  :title="row.type === 'group'
+                    ? `将合集内 ${row.members.length} 个平台插件保存到下载目录「音源导出」`
+                    : '保存到下载目录下的「音源导出」文件夹'"
+                  :disabled="isDisplayRowBusy(row) || !!exportingSourceId"
+                  @click.stop="exportDisplayRow(row)"
+                >{{ exportingSourceId === row.id ? '导出中…' : '导出' }}</button>
                 <button
                   v-if="isAdminUser"
                   type="button"
                   class="btn-sm btn-danger"
-                  :disabled="sourceBusyId === s.id || !!sourceBatchBusy || importingUrl || importingFiles"
-                  @click.stop="removeSource(s.id)"
+                  :disabled="isDisplayRowBusy(row) || !!sourceBatchBusy || importingUrl || importingFiles"
+                  @click.stop="removeDisplayRow(row)"
                 >删除</button>
               </div>
             </div>
@@ -1399,46 +1394,56 @@
 
     <Teleport to="body">
       <div
-        v-if="expandedSource"
+        v-if="expandedDisplayRow"
         class="source-platform-popover"
         role="dialog"
-        :aria-label="`${expandedSource.name} 平台开关`"
+        :aria-label="`${expandedDisplayRow.name} 平台开关`"
         :style="platformPopoverStyle"
         @click.stop
       >
         <div class="platform-popover-head">
           <div class="platform-popover-title-row">
-            <div class="platform-popover-title">平台解析</div>
+            <div class="platform-popover-title">{{ expandedDisplayRow.type === 'group' ? '合集平台' : '平台解析' }}</div>
             <div class="platform-switch-actions">
-              <button type="button" class="plat-link plat-link-on" @click="setSourcePlatformsAll(expandedSource, true)">全启用</button>
-              <button type="button" class="plat-link plat-link-off" @click="setSourcePlatformsAll(expandedSource, false)">全关闭</button>
+              <button type="button" class="plat-link plat-link-on" @click="setDisplayRowPlatformsAll(expandedDisplayRow, true)">全启用</button>
+              <button type="button" class="plat-link plat-link-off" @click="setDisplayRowPlatformsAll(expandedDisplayRow, false)">全关闭</button>
             </div>
           </div>
-          <p class="platform-switch-tip">关闭后，该音源不再解析对应平台歌曲（仅对本账号生效）。</p>
+          <p class="platform-switch-tip">
+            {{ expandedDisplayRow.type === 'group'
+              ? '关闭后，该合集下对应平台插件不再参与解析（仅对本账号生效）。'
+              : '关闭后，该音源不再解析对应平台歌曲（仅对本账号生效）。' }}
+          </p>
         </div>
         <div class="platform-switch-list">
-          <div v-for="p in platformOptionsForSource(expandedSource)" :key="p.id" class="platform-switch-item">
+          <div v-for="p in platformOptionsForDisplayRow(expandedDisplayRow)" :key="p.id" class="platform-switch-item">
             <div class="platform-switch-left">
-              <span class="platform-badge" :class="`plat-${p.id}`">{{ p.short }}</span>
+              <span class="platform-badge" :class="p.badgeClass || `plat-${p.id}`">{{ p.short }}</span>
               <div class="platform-switch-meta">
                 <div class="platform-switch-name">
                   {{ p.label }}
-                  <span class="platform-code">{{ p.id }}</span>
+                  <span v-if="p.code" class="platform-code">{{ p.code }}</span>
                 </div>
-                <div class="platform-switch-status" :class="{ on: isSourcePlatformOn(expandedSource.id, p.id), auto: isAutoClosedPlatform(expandedSource, p.id) }">
-                  {{ platformSwitchStatus(expandedSource, p.id) }}
+                <div
+                  class="platform-switch-status"
+                  :class="{ on: isDisplayPlatformOn(expandedDisplayRow, p), auto: isDisplayPlatformAutoClosed(expandedDisplayRow, p) }"
+                >
+                  {{ displayPlatformStatus(expandedDisplayRow, p) }}
                 </div>
               </div>
             </div>
             <label class="toggle">
               <input
                 type="checkbox"
-                :checked="isSourcePlatformOn(expandedSource.id, p.id)"
-                @change="toggleSourcePlatform(expandedSource, p.id, $event.target.checked)"
+                :checked="isDisplayPlatformOn(expandedDisplayRow, p)"
+                @change="toggleDisplayPlatform(expandedDisplayRow, p, $event.target.checked)"
               />
               <span class="slider"></span>
             </label>
           </div>
+          <p v-if="!platformOptionsForDisplayRow(expandedDisplayRow).length" class="platform-switch-tip">
+            暂无平台声明；合集音源请先激活，或检查插件是否已导入完整。
+          </p>
         </div>
       </div>
     </Teleport>
@@ -1509,6 +1514,13 @@ import {
   platformsOfSource,
   orderPlatformKeys,
 } from '../utils/platforms.js'
+import {
+  buildSourceDisplayRows,
+  memberPlatformLabel,
+  rowMemberIds,
+  isRowPartiallyActive,
+  isRowAnyActive,
+} from '../utils/sourceFamily.js'
 
 const route = useRoute()
 
@@ -1674,9 +1686,11 @@ const outdatedSourceCount = computed(() =>
 )
 const selectedSourceIds = ref([])
 const sourceBatchBusy = ref('')
-const allSourcesSelected = computed(() => (
-  sourceList.value.length > 0 && selectedSourceIds.value.length === sourceList.value.length
-))
+const sourceDisplayRows = computed(() => buildSourceDisplayRows(sourceList.value))
+const allSourcesSelected = computed(() => {
+  const ids = sourceList.value.map((s) => s.id)
+  return ids.length > 0 && ids.every((id) => selectedSourceIds.value.includes(id))
+})
 const someSourcesSelected = computed(() => selectedSourceIds.value.length > 0)
 
 function isSourceSelected(id) {
@@ -1689,6 +1703,22 @@ function toggleSourceSelected(id) {
     selectedSourceIds.value = selectedSourceIds.value.filter((x) => x !== id)
   } else {
     selectedSourceIds.value = [...selectedSourceIds.value, id]
+  }
+}
+
+function isDisplayRowSelected(row) {
+  const ids = rowMemberIds(row)
+  return ids.length > 0 && ids.every((id) => selectedSourceIds.value.includes(id))
+}
+
+function toggleDisplayRowSelected(row) {
+  const ids = rowMemberIds(row)
+  if (!ids.length) return
+  if (isDisplayRowSelected(row)) {
+    const drop = new Set(ids)
+    selectedSourceIds.value = selectedSourceIds.value.filter((id) => !drop.has(id))
+  } else {
+    selectedSourceIds.value = [...new Set([...selectedSourceIds.value, ...ids])]
   }
 }
 
@@ -1706,7 +1736,355 @@ const PLATFORM_SHORT = {
 const sourcePlatformMap = ref({})
 const expandedSourceId = ref('')
 const platformPopoverStyle = ref({})
-const expandedSource = computed(() => sourceList.value.find((row) => row.id === expandedSourceId.value) || null)
+const expandedDisplayRow = computed(() => (
+  sourceDisplayRows.value.find((row) => row.id === expandedSourceId.value) || null
+))
+/** @deprecated 兼容旧引用：展开合集时取 primary */
+const expandedSource = computed(() => expandedDisplayRow.value?.primary || null)
+
+function activeIdsSnapshot() {
+  return activeSourceIds.value
+}
+
+function isDisplayRowActive(row) {
+  return isRowAnyActive(row, activeIdsSnapshot())
+}
+
+function isDisplayRowPartial(row) {
+  return isRowPartiallyActive(row, activeIdsSnapshot())
+}
+
+function isDisplayRowBusy(row) {
+  const busy = sourceBusyId.value
+  if (!busy) return false
+  if (busy === row?.id) return true
+  return rowMemberIds(row).includes(busy)
+}
+
+function isDisplayRowUpdating(row) {
+  const id = sourceUpdatingId.value
+  if (!id) return false
+  return id === row?.id || rowMemberIds(row).includes(id)
+}
+
+function displayRowMeta(row) {
+  const parts = []
+  if (row?.author) parts.push(row.author)
+  if (row?.version) parts.push(`v${row.version}`)
+  if (row?.type === 'group') {
+    const total = row.members?.length || 0
+    const on = (row.members || []).filter((m) => isSourceActive(m.id)).length
+    parts.push(total ? `平台 ${on}/${total}` : '合集')
+  } else if (row?.primary) {
+    parts.push(sourcePlatformSummary(row.primary))
+  }
+  return parts.filter(Boolean).join(' · ')
+}
+
+function displayRowHealthLevel(row) {
+  const levels = (row?.members || []).map((m) => m?.health?.level).filter(Boolean)
+  if (levels.includes('mixed')) return 'mixed'
+  if (levels.includes('preview') && levels.some((l) => l !== 'preview' && l !== 'unknown')) return 'mixed'
+  if (levels.includes('preview')) return 'preview'
+  return ''
+}
+
+function displayRowUnhealthy(row) {
+  return (row?.members || []).some((m) => m?.health?.unhealthy)
+}
+
+function displayRowHealthBadge(row) {
+  if (!displayRowUnhealthy(row)) return ''
+  const level = displayRowHealthLevel(row)
+  if (level === 'mixed') return '部分平台试听'
+  const badge = (row?.members || []).find((m) => m?.health?.badge)?.health?.badge
+  return badge || (level === 'preview' ? '多为试听' : '')
+}
+
+function displayRowHealthTip(row) {
+  if (!displayRowUnhealthy(row)) return ''
+  const tips = (row?.members || [])
+    .map((m) => m?.health?.tip)
+    .filter(Boolean)
+  return [...new Set(tips)].join('；')
+}
+
+function displayRowAutoCloseNotice(row) {
+  const names = []
+  for (const m of row?.members || []) {
+    for (const p of autoClosedList(m)) {
+      const label = p.label || memberPlatformLabel(m) || p.id
+      if (label) names.push(label)
+    }
+  }
+  if (!names.length) return ''
+  return `${[...new Set(names)].join('、')} 为试听源，已自动关闭平台解析`
+}
+
+function displayRowCanUpdate(row) {
+  return rowMemberIds(row).some((id) => sourceCanApplyUpdate(id))
+}
+
+function displayRowUpdateTip(row) {
+  for (const id of rowMemberIds(row)) {
+    const tip = sourceUpdateTip(id)
+    if (tip) return tip
+  }
+  return ''
+}
+
+function displayRowUpdateLog(row) {
+  for (const id of rowMemberIds(row)) {
+    const log = sourceUpdateMap.value[id]?.log
+    if (log) return log
+  }
+  return ''
+}
+
+async function activateDisplayRow(row) {
+  const ids = rowMemberIds(row).filter((id) => !isSourceActive(id))
+  if (!ids.length) return
+  if (ids.length === 1 && row.type === 'solo') {
+    await activateSource(ids[0])
+    return
+  }
+  if (sourceBusyId.value || sourceBatchBusy.value) {
+    if (sourceBusyId.value !== row.id) showToast('请等待当前音源操作完成', 'info')
+    return
+  }
+  sourceBusyId.value = row.id
+  sourceBatchBusy.value = 'activate'
+  try {
+    const res = await api.source.activateBatch(ids)
+    if (Array.isArray(res?.activeIds)) syncActiveIdsFromServer(res.activeIds)
+    const okMap = new Map((res.results || []).map((r) => [r.id, r]))
+    sourceList.value = sourceList.value.map((s) => {
+      const hit = okMap.get(s.id)
+      return {
+        ...s,
+        active: activeSourceIds.value.includes(s.id),
+        sources: hit?.sources || s.sources,
+        name: hit?.name || s.name,
+      }
+    })
+    sourcePlatformMap.value = mergeDeclaredPlatformsIntoMap(sourcePlatformMap.value)
+    schedulePersistEnabledPlatforms()
+    const failed = res.errors?.length || 0
+    if (failed && res.results?.length) showToast(`已激活部分平台，失败 ${failed} 个`, 'error')
+    else if (failed) showToast(res.errors[0]?.error || '激活失败', 'error')
+    else showToast(row.type === 'group' ? `已激活「${row.name}」` : '音源已激活', 'success')
+  } catch (e) {
+    showToast(e.message || '激活失败', 'error')
+  } finally {
+    sourceBusyId.value = ''
+    sourceBatchBusy.value = ''
+  }
+  refreshPlatformTabsLater()
+}
+
+async function deactivateDisplayRow(row) {
+  const ids = rowMemberIds(row).filter((id) => isSourceActive(id))
+  if (!ids.length) return
+  if (ids.length === 1 && row.type === 'solo') {
+    await deactivateSource(ids[0])
+    return
+  }
+  if (sourceBusyId.value || sourceBatchBusy.value) {
+    showToast('请等待当前音源操作完成', 'info')
+    return
+  }
+  sourceBusyId.value = row.id
+  sourceBatchBusy.value = 'deactivate'
+  try {
+    const res = await api.source.deactivateBatch(ids)
+    if (Array.isArray(res?.activeIds)) syncActiveIdsFromServer(res.activeIds)
+    else syncActiveIdsFromServer(activeSourceIds.value.filter((id) => !ids.includes(id)))
+    showToast(row.type === 'group' ? `已停用「${row.name}」` : '音源已停用', 'success')
+  } catch (e) {
+    showToast(e.message || '停用失败', 'error')
+  } finally {
+    sourceBusyId.value = ''
+    sourceBatchBusy.value = ''
+  }
+  refreshPlatformTabsLater()
+}
+
+async function removeDisplayRow(row) {
+  const ids = rowMemberIds(row)
+  if (!ids.length || !isAdminUser.value) return
+  if (row.type === 'solo') {
+    await removeSource(ids[0])
+    return
+  }
+  const ok = await appConfirm({
+    title: '删除合集音源',
+    message: `确定删除「${row.name}」？将移除其中 ${ids.length} 个平台插件，此操作不可恢复。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
+  if (sourceBatchBusy.value) return
+  sourceBatchBusy.value = 'delete'
+  sourceBusyId.value = row.id
+  try {
+    const res = await api.source.removeBatch(ids)
+    const deleted = new Set(res.deleted || ids)
+    sourceList.value = sourceList.value.filter((s) => !deleted.has(s.id))
+    if (Array.isArray(res.activeIds)) activeSourceIds.value = res.activeIds
+    else activeSourceIds.value = activeSourceIds.value.filter((id) => !deleted.has(id))
+    dropSelectedSourceIds([...deleted])
+    if (expandedSourceId.value === row.id) expandedSourceId.value = ''
+    const nextMap = { ...sourcePlatformMap.value }
+    let mapChanged = false
+    for (const id of deleted) {
+      if (Object.prototype.hasOwnProperty.call(nextMap, id)) {
+        delete nextMap[id]
+        mapChanged = true
+      }
+    }
+    if (mapChanged) {
+      sourcePlatformMap.value = nextMap
+      schedulePersistEnabledPlatforms()
+    }
+    showToast(`已删除「${row.name}」`, 'success')
+    await refreshPlatformTabs()
+  } catch (e) {
+    showToast(e.message || '删除失败', 'error')
+  } finally {
+    sourceBusyId.value = ''
+    sourceBatchBusy.value = ''
+  }
+}
+
+async function dismissDisplayRowHealth(row) {
+  const targets = (row?.members || []).filter((m) => m?.health?.unhealthy || autoClosedList(m).length)
+  if (!targets.length) return
+  try {
+    for (const m of targets) {
+      await api.source.dismissHealth(m.id)
+    }
+    const cleared = new Set(targets.map((m) => m.id))
+    sourceList.value = sourceList.value.map((item) => (
+      cleared.has(item.id)
+        ? { ...item, health: item.health ? { ...item.health, unhealthy: false, tip: '', badge: '', autoClosedPlatforms: [] } : null }
+        : item
+    ))
+    showToast('已关闭该音源健康提示', 'info')
+  } catch (e) {
+    showToast(e.message || '操作失败', 'error')
+  }
+}
+
+async function applyDisplayRowUpdate(row) {
+  const targets = (row?.members || []).filter((m) => sourceCanApplyUpdate(m.id))
+  if (!targets.length || sourceUpdatingId.value || sourceUpdatingAll.value) return
+  if (targets.length === 1) {
+    await applySourceUpdate(targets[0])
+    return
+  }
+  sourceUpdatingId.value = row.id
+  let okCount = 0
+  try {
+    for (const m of targets) {
+      const id = m.id
+      const hint = sourceUpdateMap.value[id]
+      try {
+        const res = await api.source.updateSource(id, hint?.updateUrl || '')
+        if (res.error) throw new Error(res.error)
+        markSourceUpdated(id)
+        okCount += 1
+      } catch {
+        /* 继续更新其余平台插件 */
+      }
+    }
+    sourceList.value = await api.source.list()
+    showToast(okCount ? `已更新 ${okCount} 个平台插件` : '更新失败', okCount ? 'success' : 'error')
+  } finally {
+    sourceUpdatingId.value = ''
+  }
+}
+
+function platformOptionsForDisplayRow(row) {
+  if (!row) return []
+  if (row.type !== 'group') return platformOptionsForSource(row.primary)
+  return (row.members || []).map((m) => {
+    const plats = platformsOfSource(m)
+    const platformId = plats[0] || ''
+    const label = memberPlatformLabel(m)
+    const short = PLATFORM_SHORT[platformId] || String(label).slice(0, 1) || '?'
+    return {
+      id: m.id,
+      memberId: m.id,
+      platformId,
+      label,
+      short,
+      code: platformId || undefined,
+      badgeClass: platformId ? `plat-${platformId}` : 'plat-generic',
+    }
+  })
+}
+
+function isDisplayPlatformOn(row, p) {
+  if (!row || !p) return false
+  if (row.type === 'group') {
+    const mid = p.memberId || p.id
+    if (!isSourceActive(mid)) return false
+    const m = (row.members || []).find((x) => x.id === mid)
+    if (!m) return false
+    const plats = platformsOfSource(m)
+    if (!plats.length) return true
+    if (p.platformId) return isSourcePlatformOn(mid, p.platformId)
+    return plats.some((id) => isSourcePlatformOn(mid, id))
+  }
+  return isSourcePlatformOn(row.primary.id, p.id)
+}
+
+function isDisplayPlatformAutoClosed(row, p) {
+  if (row?.type === 'group') {
+    const m = (row.members || []).find((x) => x.id === (p.memberId || p.id))
+    if (!m) return false
+    if (p.platformId) return isAutoClosedPlatform(m, p.platformId)
+    return autoClosedList(m).length > 0 && !isSourceActive(m.id)
+  }
+  return isAutoClosedPlatform(row.primary, p.id)
+}
+
+function displayPlatformStatus(row, p) {
+  if (isDisplayPlatformOn(row, p)) return '允许解析'
+  if (isDisplayPlatformAutoClosed(row, p)) return '试听源，已自动关闭'
+  if (row?.type === 'group' && !isSourceActive(p.memberId || p.id)) return '未激活'
+  return '已关闭'
+}
+
+async function toggleDisplayPlatform(row, p, on) {
+  if (!row || !p) return
+  if (row.type === 'group') {
+    const mid = p.memberId || p.id
+    const m = (row.members || []).find((x) => x.id === mid)
+    if (!m) return
+    if (on) {
+      if (!isSourceActive(mid)) await activateSource(mid)
+      const plats = platformsOfSource(m)
+      const pid = p.platformId || plats[0]
+      if (pid) toggleSourcePlatform(m, pid, true)
+    } else if (isSourceActive(mid)) {
+      await deactivateSource(mid)
+    }
+    return
+  }
+  toggleSourcePlatform(row.primary, p.id, on)
+}
+
+async function setDisplayRowPlatformsAll(row, on) {
+  if (!row) return
+  if (row.type === 'group') {
+    if (on) await activateDisplayRow(row)
+    else await deactivateDisplayRow(row)
+    return
+  }
+  setSourcePlatformsAll(row.primary, on)
+}
+
 const settingsPageRef = ref(null)
 const settingsPanelRef = ref(null)
 const settingsNavRef = ref(null)
@@ -3742,8 +4120,13 @@ function toggleSourcePlatformPanel(sourceId) {
     platformPopoverStyle.value = {}
     return
   }
-  const s = sourceList.value.find((row) => row.id === sourceId)
-  if (s) ensureSourcePlatformEntry(s)
+  const display = sourceDisplayRows.value.find((row) => row.id === sourceId)
+  if (display) {
+    for (const m of display.members || []) ensureSourcePlatformEntry(m)
+  } else {
+    const s = sourceList.value.find((row) => row.id === sourceId)
+    if (s) ensureSourcePlatformEntry(s)
+  }
   nextTick(() => placePlatformPopover())
 }
 
@@ -3910,22 +4293,48 @@ async function deactivateSource(id) {
   refreshPlatformTabsLater()
 }
 
-async function exportSource(source) {
-  const id = source?.id
-  if (!id || exportingSourceId.value) return
-  exportingSourceId.value = id
+async function exportOneSourceScript(sourceId) {
+  const res = await api.source.exportScript(sourceId)
+  const script = String(res?.script || '')
+  if (!script.trim()) throw new Error('该音源没有可导出的脚本')
+  if (!res.savedPath) {
+    throw new Error(res.saveError || '未能保存到 NAS 目录，请检查设置里的下载路径')
+  }
+  return res
+}
+
+/** 单个脚本或合集（按成员逐个写出 .js）；恢复时用「本地导入」多选即可 */
+async function exportDisplayRow(row) {
+  const members = (row?.members || []).filter((m) => m?.id)
+  if (!members.length || exportingSourceId.value) return
+  exportingSourceId.value = row.id
   try {
-    const res = await api.source.exportScript(id)
-    const script = String(res?.script || '')
-    if (!script.trim()) throw new Error('该音源没有可导出的脚本')
-    if (!res.savedPath) {
-      throw new Error(res.saveError || '未能保存到 NAS 目录，请检查设置里的下载路径')
+    const saved = []
+    const failures = []
+    for (const m of members) {
+      try {
+        const res = await exportOneSourceScript(m.id)
+        saved.push({ name: m.name || res.name || m.id, path: res.savedPath, dir: res.savedDir })
+      } catch (e) {
+        failures.push(`${m.name || m.id}：${e.message || e}`)
+      }
     }
-    showToast(`已保存到 ${res.savedPath}`, 'success')
+    if (!saved.length) {
+      throw new Error(failures[0] || '没有可导出的脚本')
+    }
+    const dir = saved[0].dir || saved[0].path
+    const toastMsg = row.type === 'group'
+      ? `已导出「${row.name}」${saved.length} 个插件${failures.length ? `（${failures.length} 个失败）` : ''}`
+      : `已保存到 ${saved[0].path}`
+    showToast(toastMsg, failures.length ? 'info' : 'success')
     await appAlert({
-      title: '音源已导出',
-      message: res.savedPath,
-      hint: '请到飞牛「文件管理」打开该路径。目录名是「音源导出」。',
+      title: row.type === 'group' ? '合集音源已导出' : '音源已导出',
+      message: row.type === 'group'
+        ? `${dir}\n共 ${saved.length} 个 .js${failures.length ? `\n失败 ${failures.length} 个` : ''}`
+        : saved[0].path,
+      hint: row.type === 'group'
+        ? '请到飞牛「文件管理」打开「音源导出」。恢复时在音源管理用「本地导入」多选这些 .js 即可（会重新合成合集）。'
+        : '请到飞牛「文件管理」打开该路径。目录名是「音源导出」。',
       confirmText: '知道了',
     })
   } catch (e) {
@@ -4752,6 +5161,9 @@ function showToast(text, type = 'info') {
 .plat-kw { background: #f59f00; }
 .plat-kg { background: #1c7ed6; }
 .plat-mg { background: #e64980; }
+.plat-qs { background: #7048e8; }
+.plat-bili { background: #fb7299; }
+.plat-generic { background: var(--text-muted, #868e96); }
 .platform-switch-meta { min-width: 0; }
 .platform-switch-name {
   display: flex;
@@ -4846,6 +5258,16 @@ function showToast(text, type = 'info') {
 }
 .source-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .source-name { font-size: 14px; font-weight: 500; }
+.source-group-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.source-item.is-source-group .source-name { letter-spacing: 0.01em; }
 .source-health-badge {
   font-size: 11px;
   padding: 1px 8px;

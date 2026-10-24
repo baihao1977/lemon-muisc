@@ -49,6 +49,26 @@ const RULES = [
     message: '音源脚本运行出错，请检查音源或重新导入',
   },
   {
+    test: /getToneId is not defined/i,
+    message: '听书插件脚本不完整（缺少发音人接口），请重新激活或更新该插件',
+  },
+  {
+    test: /ReferenceError:/i,
+    message: '音源插件脚本运行出错，请更新或更换该插件',
+  },
+  {
+    test: /书籍信息获取失败/i,
+    message: '听书源无法获取该书信息（可能搜到的是整本书而非章节，或书已下架）',
+  },
+  {
+    test: /CALL_SERVICE_FAIL|101013/i,
+    message: '听书源上游服务调用失败，请稍后重试或换其它听书源',
+  },
+  {
+    test: /无法识别的章节ID/i,
+    message: '无法识别听书章节，请换一本来源或打开专辑后再播',
+  },
+  {
     test: /请求超时\(30s\)|请求超时\(20s\)/i,
     message: '音源响应超时，请稍后重试',
   },
@@ -142,6 +162,33 @@ function stripNoise(text) {
     .trim()
 }
 
+/** 插件常把上游 JSON 整段扔进 Error.message，从中抽出可读中文 */
+function extractJsonApiMessage(raw) {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  const tryParse = (s) => {
+    try {
+      const obj = JSON.parse(s)
+      if (!obj || typeof obj !== 'object') return ''
+      for (const key of ['title', 'details', 'popup_title', 'message', 'msg', 'error', 'errmsg']) {
+        const v = obj[key]
+        if (typeof v === 'string' && /[\u4e00-\u9fff]/.test(v)) return v.trim()
+      }
+    } catch {}
+    return ''
+  }
+  if (text.startsWith('{')) {
+    const hit = tryParse(text)
+    if (hit) return hit
+  }
+  const m = text.match(/\{[\s\S]*"(?:title|details|message|msg)"[\s\S]*\}/)
+  if (m) {
+    const hit = tryParse(m[0])
+    if (hit) return hit
+  }
+  return ''
+}
+
 function looksLikeChineseMessage(text) {
   if (!text) return false
   if (/[A-Za-z]{4,}/.test(text) && /socket|timeout|ECONN|ETIMED|Failed|Error|HTTP|SSL|TLS|fetch/i.test(text)) {
@@ -166,6 +213,9 @@ export function formatUserError(error, fallback = '操作失败，请稍后重�
 
   // 先剥掉音源脚本常见前缀，再匹配具体原因
   raw = raw.replace(/^(?:后端失败|请求失败|下载失败|错误)[:：]\s*/i, '').trim() || raw
+
+  const fromJson = extractJsonApiMessage(raw)
+  if (fromJson) raw = fromJson
 
   for (const rule of RULES) {
     if (rule.test.test(raw)) {

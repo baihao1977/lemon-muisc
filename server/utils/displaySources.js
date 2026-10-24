@@ -1,5 +1,10 @@
 import { AVAILABLE_SOURCES } from '../musicSdk.js'
-import { getMergedSources, hasActiveSource, getActiveSources } from '../sourceManager.js'
+import {
+  getMergedSources,
+  hasActiveSource,
+  getActiveSources,
+  hasPluginSource,
+} from '../sourceManager.js'
 import { getStoredActiveSourceIds } from './activeSources.js'
 import { getEnabledPlatforms, isSourcePlatformEnabled } from './enabledPlatforms.js'
 import { platformDisplayName } from './platformCatalog.js'
@@ -29,6 +34,9 @@ function filterByEnabledPlatforms(sources, userId) {
   return result
 }
 
+/** 仅取链、不能搜的扩展平台（星海 qs 等）；有 MusicFree 同名可搜插件时才展示 */
+const PLAY_ONLY_EXTENDED = new Set(['qs', 'bili', 'ytb', 'xm'])
+
 function toDisplayEntry(key, info = {}) {
   const builtin = AVAILABLE_SOURCES[key]
   return {
@@ -38,6 +46,13 @@ function toDisplayEntry(key, info = {}) {
     actions: info.actions || [],
     searchable: Boolean(builtin) || info.searchable === true,
   }
+}
+
+function canShowInSearchTabs(key, info, allowedIds) {
+  if (info?.searchable !== false) return true
+  // 脚本未标 searchable：仅当存在可搜索的 MusicFree 插件时才显示（否则无搜索/无下载入口）
+  if (PLAY_ONLY_EXTENDED.has(key) && hasPluginSource(key, allowedIds)) return true
+  return false
 }
 
 /** 按用户平台开关裁剪合并后的音源能力 */
@@ -97,8 +112,10 @@ export function getDisplaySources(userId = null) {
   const enabled = filterByEnabledPlatforms(base, userId)
   const searchable = {}
   for (const [key, info] of Object.entries(enabled || {})) {
-    if (info?.searchable === false) continue
-    searchable[key] = info
+    if (!canShowInSearchTabs(key, info, allowedIds)) continue
+    searchable[key] = info?.searchable === false
+      ? { ...info, searchable: true }
+      : info
   }
   return searchable
 }

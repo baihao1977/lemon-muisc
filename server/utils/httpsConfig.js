@@ -375,24 +375,57 @@ export function listFeiniuCertificates() {
     }))
 }
 
+function matchCertByName(list, certName) {
+  const want = String(certName || '').trim()
+  if (!want || !list?.length) return null
+  const exact = list.find((c) => c.name === want)
+  if (exact) return exact
+  const fuzzy = list.find((c) => c.name.toLowerCase() === want.toLowerCase())
+  if (fuzzy) return fuzzy
+  // 域名包含匹配（如证书目录名与入口域名略有差异）
+  return list.find((c) =>
+    c.name.toLowerCase().includes(want.toLowerCase())
+    || want.toLowerCase().includes(c.name.toLowerCase()),
+  ) || null
+}
+
+function bestScoredCert(list) {
+  if (!list?.length) return null
+  return [...list].sort((a, b) => scoreCertEntry(b) - scoreCertEntry(a) || String(a.name).localeCompare(String(b.name)))[0]
+}
+
+/**
+ * 从已枚举的飞牛证书里选出当前应使用的一对。
+ * - lockToName：仅 LEMON_SSL_CERT_NAME 等显式指定时锁死名字
+ * - 默认优先「服务配置」当前 used / 网关证书，避免 https.json 里旧 certName 粘住（#48）
+ */
+export function pickFeiniuCertificate(list, { certName = '', lockToName = false } = {}) {
+  if (!list?.length) return null
+  const want = String(certName || '').trim()
+
+  if (lockToName && want) {
+    return matchCertByName(list, want)
+  }
+
+  const used = list.filter((c) => c.used)
+  if (used.length) return bestScoredCert(used)
+
+  const gateway = list.filter((c) => c.fromGateway)
+  if (gateway.length) return bestScoredCert(gateway)
+
+  // 系统未标记当前启用时：沿用缓存名（若仍存在），否则按评分
+  if (want) {
+    const matched = matchCertByName(list, want)
+    if (matched) return matched
+  }
+  return list[0]
+}
+
 function resolveFeiniuPair(certName) {
   const list = listFeiniuCertificates()
-  if (!list.length) return null
-  const want = String(certName || '').trim()
-  if (want) {
-    const exact = list.find((c) => c.name === want)
-    if (exact) return exact
-    const fuzzy = list.find((c) => c.name.toLowerCase() === want.toLowerCase())
-    if (fuzzy) return fuzzy
-    // 域名包含匹配（如证书目录名与入口域名略有差异）
-    const contain = list.find((c) =>
-      c.name.toLowerCase().includes(want.toLowerCase())
-      || want.toLowerCase().includes(c.name.toLowerCase()),
-    )
-    if (contain) return contain
-  }
-  // 已按 score 排序：gateway / used / fullchain / 非 fnOS 优先
-  return list[0]
+  // 环境变量显式指定域名时锁死；https.json 自动写入的 certName 不锁
+  const lockToName = Boolean(String(process.env.LEMON_SSL_CERT_NAME || '').trim())
+  return pickFeiniuCertificate(list, { certName, lockToName })
 }
 
 /**
@@ -411,9 +444,15 @@ export function resolveTlsListen() {
 
   // 飞牛来源：每次启动尽量读最新系统证书并刷新本地副本（续期免手动）
   if (cfg.source !== 'manual') {
+    const prevName = String(certName || '').trim()
     const pair = resolveFeiniuPair(certName)
     if (pair) {
       certName = pair.name
+      if (prevName && pair.name !== prevName && !String(process.env.LEMON_SSL_CERT_NAME || '').trim()) {
+        try {
+          console.log(`[https] 跟随飞牛当前证书: ${pair.name}（忽略配置里缓存的 ${prevName}）`)
+        } catch {}
+      }
       try {
         const copied = copyCertIntoConfig(pair.certPath, pair.keyPath)
         certPath = copied.certPath

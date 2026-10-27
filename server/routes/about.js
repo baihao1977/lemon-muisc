@@ -373,13 +373,7 @@ async function runFpkDownloadJob(job, urls, dest, part, userId) {
 }
 
 function getCurrentVersion() {
-  try {
-    const pkgPath = path.join(__dirname, '..', '..', 'package.json')
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
-    return pkg.version || '1.0.0'
-  } catch {
-    return '1.0.0'
-  }
+  return getAppVersion()
 }
 
 async function fetchGithubJson(url) {
@@ -444,7 +438,7 @@ function buildInstallHints(version, fpkAssets = []) {
   const ver = String(version || '').replace(/^v/i, '')
   if (!ver) return null
   return {
-    fpkHint: '点「加速保存」将先对各加速节点短测速，再按最快源把 FPK 拉到应用配置目录下的 fpk-updates（失败自动换源，最后回落 GitHub 直连）。完成后到飞牛「应用中心」→「手动安装」选择该文件覆盖安装。',
+    fpkHint: '点「加速保存」将先对各加速节点短测速，再按最快源把 FPK 拉到「下载目录/柠檬音乐更新」（失败自动换源，最后回落 GitHub 直连）。完成后到飞牛「应用中心」→「手动安装」，直接选该目录下的安装包覆盖安装即可。',
     fpkAssets,
   }
 }
@@ -472,7 +466,7 @@ function allocateUniqueFpkPath(dir, baseName) {
     }
     n += 1
   }
-  throw new Error('同名安装包过多，请清理配置目录下的 fpk-updates 后再试')
+  throw new Error('同名安装包过多，请清理「下载目录/柠檬音乐更新」后再试')
 }
 
 async function resolveLatestFpkAssets() {
@@ -599,7 +593,7 @@ aboutRouter.get('/diagnostics', (_req, res) => {
 })
 
 /**
- * 服务端拉取 FPK 到配置目录/fpk-updates（异步任务，经 WS / 轮询看进度）
+ * 服务端拉取 FPK 到「下载目录/柠檬音乐更新」（异步任务，经 WS / 轮询看进度）
  * body: { arch?: 'x86'|'arm', name?: string, mirror?: boolean }
  */
 aboutRouter.post('/download-fpk', requireAdmin, async (req, res) => {

@@ -257,7 +257,7 @@ select option {
 }
 .app-select.open .app-select-chevron { transform: rotate(180deg); }
 .app-select-menu {
-  z-index: 1300;
+  z-index: 14000;
   min-width: 120px;
   width: max-content;
   max-width: min(320px, 92vw);

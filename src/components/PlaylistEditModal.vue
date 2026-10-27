@@ -6,14 +6,15 @@
         <span>歌单名称</span>
         <input v-model="form.name" placeholder="歌单名称" @keydown.enter="submit" />
       </label>
-      <label class="field">
+      <!-- 勿用 label 包裹 AppSelect：会二次激活按钮，看起来像点不开 -->
+      <div class="field">
         <span>封面模式</span>
         <AppSelect
           v-model="form.coverMode"
           :options="coverModeOptions"
           block
         />
-      </label>
+      </div>
       <template v-if="form.coverMode === 'custom'">
         <label class="field">
           <span>封面图片地址</span>

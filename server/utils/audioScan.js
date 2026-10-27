@@ -9,6 +9,8 @@ const SKIP_DIR_NAMES = new Set([
   'cover-cache',
   'discover-feed-cache',
   'download-staging',
+  '柠檬音乐更新',
+  'fpk-updates',
   'lemon-smooth-play-cache',
   'lemon-ape-play-cache',
   'lemon-dlna-mp3-cache',

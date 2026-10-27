@@ -29,10 +29,11 @@
           <span>歌单名称</span>
           <input v-model="blankForm.name" placeholder="歌单名称" :disabled="importing" @keydown.enter="submit" />
         </label>
-        <label class="field">
+        <!-- 勿用 label 包裹 AppSelect：会二次激活按钮，看起来像点不开 -->
+        <div class="field">
           <span>封面模式</span>
           <AppSelect v-model="blankForm.coverMode" :options="coverModeOptions" block :disabled="importing" />
-        </label>
+        </div>
         <template v-if="blankForm.coverMode === 'custom'">
           <label class="field">
             <span>封面图片地址</span>
@@ -49,7 +50,7 @@
       </template>
 
       <template v-else>
-        <label class="field">
+        <div class="field">
           <span>音乐平台</span>
           <AppSelect
             v-model="importForm.source"
@@ -57,7 +58,7 @@
             block
             :disabled="importing || !sourceOptions.length"
           />
-        </label>
+        </div>
         <label class="field">
           <span>歌单链接</span>
           <textarea

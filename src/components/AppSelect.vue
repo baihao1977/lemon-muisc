@@ -60,8 +60,12 @@ const props = defineProps({
   block: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   minWidth: { type: String, default: '' },
-  /** 菜单 z-index；嵌套在高层弹窗内时需调高，避免被挡住 */
-  menuZIndex: { type: [Number, String], default: 1300 },
+  /**
+   * 菜单 z-index（Teleport 到 body）。
+   * 默认高于常见弹窗（创建歌单 11100、确认框 12000、歌词挑选 13000），
+   * 否则会看起来像「点了没展开」。
+   */
+  menuZIndex: { type: [Number, String], default: 14000 },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -70,11 +74,17 @@ const rootRef = ref(null)
 const menuRef = ref(null)
 const open = ref(false)
 const menuStyle = ref({})
+/** 打开当下这一轮 pointer 事件内忽略 outside-close，避免 label 二次激活立刻关掉 */
+let ignoreOutsideUntil = 0
 
 const currentLabel = computed(() => {
   const opt = props.options.find(o => o.value === props.modelValue)
   return opt?.label ?? String(props.modelValue ?? '')
 })
+
+function resolvedMenuZIndex() {
+  return Number(props.menuZIndex) || 14000
+}
 
 function updateMenuPosition() {
   const trigger = rootRef.value
@@ -89,13 +99,15 @@ function updateMenuPosition() {
     top: `${rect.bottom + 6}px`,
     left: `${left}px`,
     minWidth: `${rect.width}px`,
-    zIndex: Number(props.menuZIndex) || 1300,
+    zIndex: resolvedMenuZIndex(),
   }
 }
 
 function toggle() {
   if (props.disabled) return
-  open.value = !open.value
+  const next = !open.value
+  if (next) ignoreOutsideUntil = Date.now() + 400
+  open.value = next
 }
 
 function pick(value) {
@@ -106,7 +118,9 @@ function pick(value) {
   open.value = false
 }
 
-function onDocClick(e) {
+function onDocPointerDown(e) {
+  if (!open.value) return
+  if (Date.now() < ignoreOutsideUntil) return
   if (rootRef.value?.contains(e.target) || menuRef.value?.contains(e.target)) return
   open.value = false
 }
@@ -124,14 +138,16 @@ watch(open, async (isOpen) => {
 })
 
 onMounted(() => {
-  document.addEventListener('click', onDocClick)
+  // pointerdown + capture：比 click 更早，且不被 trigger 的 .stop 挡住误关逻辑；
+  // 打开瞬间靠 ignoreOutsideUntil 跳过同一轮手势。
+  document.addEventListener('pointerdown', onDocPointerDown, true)
   document.addEventListener('keydown', onKeydown)
   window.addEventListener('resize', updateMenuPosition)
   window.addEventListener('scroll', updateMenuPosition, true)
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('click', onDocClick)
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
   document.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', updateMenuPosition)
   window.removeEventListener('scroll', updateMenuPosition, true)

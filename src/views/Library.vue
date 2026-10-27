@@ -859,7 +859,8 @@ onMounted(() => {
   updatePlaylistCols()
   updateAlbumCols()
   loadLibrarySongColumns(api).catch(() => {})
-  hydrateLibrarySnapshot()
+  // 先本地快照秒开；扫库 / 混搭等到页面可交互后再慢慢做
+  const hadSnapshot = hydrateLibrarySnapshot()
   loadScanSummary()
   loadBrowsePreviews()
   loadSongPage({ allowLocal: true })
@@ -879,10 +880,12 @@ onMounted(() => {
       },
     }).catch(() => {})
   }
+  // 有缓存：多等一会再轻量 sync；无缓存：稍早点拉服务端，但仍不挡首屏
+  const deferMs = hadSnapshot ? 6000 : 2500
   if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(deferHeavy, { timeout: 1200 })
+    requestIdleCallback(deferHeavy, { timeout: deferMs })
   } else {
-    setTimeout(deferHeavy, 400)
+    setTimeout(deferHeavy, deferMs)
   }
 })
 

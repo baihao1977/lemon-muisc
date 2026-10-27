@@ -7,11 +7,12 @@ import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import { assertFfmpegFeatureReady } from './apePlay.js'
+import { getAppCacheSubdir } from './appPaths.js'
 
 function cacheDir() {
-  const dir = path.join(os.tmpdir(), 'lemon-dlna-mp3-cache')
-  fs.mkdirSync(dir, { recursive: true })
-  return dir
+  return getAppCacheSubdir('dlna-mp3', {
+    legacyPaths: [path.join(os.tmpdir(), 'lemon-dlna-mp3-cache')],
+  })
 }
 
 function cacheKey(filePath, stat) {

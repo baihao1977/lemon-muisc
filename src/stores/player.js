@@ -2733,7 +2733,6 @@ export function initPlayer() {
   applyAudioOutput()
 
   restoreSessionState()
-  loadCoverStyle()
   loadPlayerSettings()
 
   window.addEventListener('beforeunload', () => saveQueueState({ immediate: true }))
@@ -2977,6 +2976,68 @@ async function playNextAuto() {
   showPlayerNotice('连续多首无法播放，已暂停', 5000)
 }
 
+function normalizeAudioCacheMaxMB(raw) {
+  const n = Number.parseInt(String(raw ?? ''), 10)
+  const allowed = AUDIO_CACHE_MAX_MB_OPTIONS.map((o) => Number(o.value))
+  if (allowed.includes(n)) return n
+  return 512
+}
+
+/** 从一份完整 settings 套用播放器相关项（启动时只 GET 一次） */
+export async function applyPlayerSettingsFromMap(settings = {}) {
+  const prevViz = visualizerEnabled.value
+  const s = settings && typeof settings === 'object' ? settings : {}
+
+  if (s['player.coverStyle'] === 'card' || s['player.coverStyle'] === 'disc') {
+    coverStyle.value = s['player.coverStyle']
+  }
+
+  visualizerEnabled.value = s['player.visualizer'] !== 'false'
+  playQuality.value = normalizePlayQuality(s[PLAYER_PLAY_QUALITY_KEY])
+  crossPlatformSupplement.value = s['download.isUseOtherSource'] !== 'false'
+
+  if (s[PLAYER_SMOOTH_STREAM_KEY] == null) {
+    try {
+      const { isIosLikeDevice } = await import('../utils/device.js')
+      const def = isIosLikeDevice()
+      smoothStreamEnabled.value = def
+      try {
+        await api.settings.update({ [PLAYER_SMOOTH_STREAM_KEY]: def ? 'true' : 'false' })
+      } catch {}
+    } catch {
+      smoothStreamEnabled.value = false
+    }
+  } else {
+    smoothStreamEnabled.value = s[PLAYER_SMOOTH_STREAM_KEY] !== 'false'
+  }
+
+  if (s[PLAYER_AUDIO_CACHE_ENABLED_KEY] == null) {
+    audioCacheEnabled.value = true
+  } else {
+    audioCacheEnabled.value = s[PLAYER_AUDIO_CACHE_ENABLED_KEY] !== 'false'
+  }
+  audioCacheMaxMB.value = normalizeAudioCacheMaxMB(s[PLAYER_AUDIO_CACHE_MAX_MB_KEY])
+  setPlayAudioCachePrefs({
+    enabled: audioCacheEnabled.value,
+    maxBytes: audioCacheMaxMB.value * 1024 * 1024,
+  })
+
+  if (smoothStreamEnabled.value && visualizerEnabled.value) {
+    visualizerEnabled.value = false
+    try {
+      await api.settings.update({ 'player.visualizer': 'false' })
+    } catch {}
+  }
+
+  if (prevViz && !visualizerEnabled.value) {
+    await restoreNativeAudioOutput()
+  } else if (visualizerEnabled.value && audio && !audio.paused) {
+    await ensurePlaybackGraph()
+    scheduleAudioAnalyserRefresh()
+  }
+  await applyBackgroundPlayMode()
+}
+
 export async function loadCoverStyle() {
   try {
     const settings = await api.settings.get()
@@ -3018,7 +3079,6 @@ export async function loadSmoothStreamSetting() {
   try {
     const settings = await api.settings.get()
     if (settings[PLAYER_SMOOTH_STREAM_KEY] == null) {
-      // iPhone / iPad 默认开：无线 CarPlay 场景最常见
       const { isIosLikeDevice } = await import('../utils/device.js')
       const def = isIosLikeDevice()
       smoothStreamEnabled.value = def
@@ -3036,7 +3096,6 @@ export async function loadSmoothStreamSetting() {
       smoothStreamEnabled.value = false
     }
   }
-  // 流畅模式与频谱抢 CPU/WebAudio，CarPlay 上务必关可视化
   if (smoothStreamEnabled.value && visualizerEnabled.value) {
     visualizerEnabled.value = false
     try {
@@ -3046,13 +3105,6 @@ export async function loadSmoothStreamSetting() {
       await applyBackgroundPlayMode()
     } catch {}
   }
-}
-
-function normalizeAudioCacheMaxMB(raw) {
-  const n = Number.parseInt(String(raw ?? ''), 10)
-  const allowed = AUDIO_CACHE_MAX_MB_OPTIONS.map((o) => Number(o.value))
-  if (allowed.includes(n)) return n
-  return 512
 }
 
 export async function loadAudioCacheSetting() {
@@ -3084,13 +3136,13 @@ export async function clearAudioCache() {
 
 export { formatCacheBytes }
 
+/** 启动时只拉一次 /settings，再分发到封面/频谱/音质/转码/缓存 */
 export async function loadPlayerSettings() {
-  await Promise.all([
-    loadVisualizerSetting(),
-    loadPlayQualitySetting(),
-    loadSmoothStreamSetting(),
-    loadAudioCacheSetting(),
-  ])
+  let settings = {}
+  try {
+    settings = (await api.settings.get()) || {}
+  } catch {}
+  await applyPlayerSettingsFromMap(settings)
 }
 
 export function openFullscreenPlayer() {

@@ -68,10 +68,10 @@ export function startLibraryAutoWatch() {
   }
   started = true
   restartLibraryAutoWatch()
-  // 启动稍后做一次，避免与启动时其它 IO 挤在一起
+  // 首次比对再延后，让页面先可交互
   setTimeout(() => {
     tick().catch(() => {})
-  }, 8000).unref?.()
+  }, 20000).unref?.()
 }
 
 export function stopLibraryAutoWatch() {

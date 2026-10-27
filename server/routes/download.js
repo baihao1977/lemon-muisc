@@ -11,6 +11,7 @@ import { joinArtists } from '../utils/artistTag.js'
 import { buildMusicInfoFromTask } from '../utils/musicInfo.js'
 import { buildEmbedLyrics } from '../utils/lyric.js'
 import { getDownloadSavePath, isAllowedMediaPath } from '../utils/filePaths.js'
+import { getAppCacheSubdir } from '../utils/appPaths.js'
 import { getMergedSettings } from '../utils/userSettings.js'
 import { fetchTrackLyric, fetchTrackCover } from '../utils/trackMeta.js'
 import { resolveDownloadEmbedMeta } from '../utils/downloadEmbedMeta.js'
@@ -1569,7 +1570,11 @@ function lrcPathFor(audioPath) {
 }
 
 function getDownloadStagingRoot() {
-  return path.join(process.env.CONFIG_PATH || '/config', 'download-staging')
+  const base = process.env.CONFIG_PATH || '/config'
+  // 与其它磁盘缓存统一进 CONFIG_PATH/cache，旧版 config/download-staging 自动迁移
+  return getAppCacheSubdir('download-staging', {
+    legacyPaths: [path.join(base, 'download-staging')],
+  })
 }
 
 function getDownloadStagingDir(taskId) {

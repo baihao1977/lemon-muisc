@@ -4,6 +4,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { createRequire } from 'module'
+import { getAppCacheSubdir } from './appPaths.js'
 import { getGlobalSettings, setGlobalSettings } from './userSettings.js'
 
 const require = createRequire(import.meta.url)
@@ -184,9 +185,9 @@ function canRun(bin) {
 }
 
 function cacheDir() {
-  const dir = path.join(os.tmpdir(), 'lemon-ape-play-cache')
-  fs.mkdirSync(dir, { recursive: true })
-  return dir
+  return getAppCacheSubdir('ape-play', {
+    legacyPaths: [path.join(os.tmpdir(), 'lemon-ape-play-cache')],
+  })
 }
 
 function cacheKey(filePath, stat) {

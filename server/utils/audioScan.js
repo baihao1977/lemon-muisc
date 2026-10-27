@@ -1,10 +1,44 @@
 import fs from 'fs'
 import path from 'path'
+import { isUnderAppCachePath } from './appPaths.js'
 
 export const AUDIO_EXTS = ['.mp3', '.flac', '.wav', '.ape', '.ogg', '.m4a', '.aac', '.wma', '.dsf', '.dff']
 
+/** 目录名命中则跳过（应用半成品 / NAS 垃圾目录；真实路径另用 isUnderAppCachePath） */
+const SKIP_DIR_NAMES = new Set([
+  'cover-cache',
+  'discover-feed-cache',
+  'download-staging',
+  'lemon-smooth-play-cache',
+  'lemon-ape-play-cache',
+  'lemon-dlna-mp3-cache',
+  '.git',
+  'node_modules',
+  '@eaDir',
+  '#recycle',
+  '$RECYCLE.BIN',
+  'System Volume Information',
+])
+
 function isAudioName(name) {
   return AUDIO_EXTS.includes(path.extname(name).toLowerCase())
+}
+
+function isTransientOrCacheName(name) {
+  const n = String(name || '')
+  if (!n) return true
+  // 下载/转码半成品；隐藏文件一般不是曲库音频
+  if (n.endsWith('.part') || n.endsWith('.partial')) return true
+  if (n.startsWith('.')) return true
+  return false
+}
+
+function shouldSkipDirectory(name, fullPath) {
+  if (SKIP_DIR_NAMES.has(name)) return true
+  try {
+    if (isUnderAppCachePath(fullPath)) return true
+  } catch {}
+  return false
 }
 
 function entryLooksLikeFile(entry, fullPath) {
@@ -26,6 +60,17 @@ function entryLooksLikeFile(entry, fullPath) {
 export function listAudioFiles(rootDir, { maxDepth = Infinity, maxFiles = 50000 } = {}) {
   const files = []
   const errors = []
+  if (!rootDir) {
+    listAudioFiles.lastErrors = errors
+    return files
+  }
+  try {
+    if (isUnderAppCachePath(rootDir)) {
+      listAudioFiles.lastErrors = errors
+      return files
+    }
+  } catch {}
+
   const stack = [{ dir: rootDir, depth: 0 }]
 
   while (stack.length && files.length < maxFiles) {
@@ -43,17 +88,21 @@ export function listAudioFiles(rootDir, { maxDepth = Infinity, maxFiles = 50000 
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name)
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        stack.push({ dir: fullPath, depth: depth + 1 })
+        if (!shouldSkipDirectory(entry.name, fullPath)) {
+          stack.push({ dir: fullPath, depth: depth + 1 })
+        }
         continue
       }
       if (entry.isSymbolicLink()) {
         try {
           const st = fs.statSync(fullPath)
           if (st.isDirectory()) {
-            stack.push({ dir: fullPath, depth: depth + 1 })
+            if (!shouldSkipDirectory(entry.name, fullPath)) {
+              stack.push({ dir: fullPath, depth: depth + 1 })
+            }
             continue
           }
-          if (st.isFile() && isAudioName(entry.name)) {
+          if (st.isFile() && isAudioName(entry.name) && !isTransientOrCacheName(entry.name)) {
             files.push(fullPath)
             if (files.length >= maxFiles) return files
           }
@@ -62,7 +111,11 @@ export function listAudioFiles(rootDir, { maxDepth = Infinity, maxFiles = 50000 
         }
         continue
       }
-      if (entryLooksLikeFile(entry, fullPath) && isAudioName(entry.name)) {
+      if (
+        entryLooksLikeFile(entry, fullPath) &&
+        isAudioName(entry.name) &&
+        !isTransientOrCacheName(entry.name)
+      ) {
         files.push(fullPath)
         if (files.length >= maxFiles) return files
       }
@@ -98,17 +151,21 @@ export function listDirEntries(dirPath) {
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry.name)
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      dirs.push({ name: entry.name, path: fullPath })
+      if (!shouldSkipDirectory(entry.name, fullPath)) {
+        dirs.push({ name: entry.name, path: fullPath })
+      }
       continue
     }
     if (entry.isSymbolicLink()) {
       try {
         const st = fs.statSync(fullPath)
         if (st.isDirectory()) {
-          dirs.push({ name: entry.name, path: fullPath })
+          if (!shouldSkipDirectory(entry.name, fullPath)) {
+            dirs.push({ name: entry.name, path: fullPath })
+          }
           continue
         }
-        if (st.isFile() && isAudioName(entry.name)) {
+        if (st.isFile() && isAudioName(entry.name) && !isTransientOrCacheName(entry.name)) {
           audioFiles.push(fullPath)
         }
       } catch (e) {
@@ -116,7 +173,11 @@ export function listDirEntries(dirPath) {
       }
       continue
     }
-    if (entryLooksLikeFile(entry, fullPath) && isAudioName(entry.name)) {
+    if (
+      entryLooksLikeFile(entry, fullPath) &&
+      isAudioName(entry.name) &&
+      !isTransientOrCacheName(entry.name)
+    ) {
       audioFiles.push(fullPath)
     }
   }

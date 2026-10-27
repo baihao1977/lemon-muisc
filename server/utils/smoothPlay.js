@@ -11,6 +11,7 @@ import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import { assertFfmpegFeatureReady } from './apePlay.js'
+import { getAppCacheSubdir } from './appPaths.js'
 
 /** 需要转码降码率的扩展名 */
 export const SMOOTH_PLAY_EXTS = new Set([
@@ -36,9 +37,9 @@ export function canSmoothOrRepairTranscode(filePath) {
 }
 
 function cacheDir() {
-  const dir = path.join(os.tmpdir(), 'lemon-smooth-play-cache')
-  fs.mkdirSync(dir, { recursive: true })
-  return dir
+  return getAppCacheSubdir('smooth-play', {
+    legacyPaths: [path.join(os.tmpdir(), 'lemon-smooth-play-cache')],
+  })
 }
 
 function cacheKey(filePath, stat) {

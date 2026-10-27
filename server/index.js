@@ -75,12 +75,12 @@ app.locals.configPath = CONFIG_PATH
 
 initDB(CONFIG_PATH)
 migrateFilePaths(DATA_PATH)
-refreshStoredSourceMeta()
 try {
   ensureDefaultAdmin()
 } catch (e) {
   console.warn('[auth] 初始化默认管理员失败:', e?.message || e)
 }
+// 音源元数据刷新 / 沙箱加载放到 listen 之后后台跑，避免拖慢「应用可打开」
 
 // 兼容 Web：/api；开放客户端优先：/api/v1（同一路由器）
 app.use('/api/v1', apiRouter)
@@ -140,9 +140,20 @@ async function restoreActiveSources() {
   }
 }
 
-await restoreActiveSources()
 initDownloadQueue()
 startMemoryGuard()
+
+/** 后台恢复音源沙箱（不阻塞端口监听） */
+let sourcesRestorePromise = null
+function scheduleRestoreActiveSources() {
+  if (sourcesRestorePromise) return sourcesRestorePromise
+  sourcesRestorePromise = restoreActiveSources()
+    .catch((e) => console.error('自动激活音源失败:', e?.message || e))
+    .finally(() => {
+      // 允许失败后重试（极少需要）
+    })
+  return sourcesRestorePromise
+}
 
 function shutdown(signal) {
   console.log(`收到 ${signal}，正在关闭服务...`)
@@ -189,23 +200,48 @@ server.listen(PORT, '::', () => {
   try {
     syncNativeDesktopProtocol('auto')
   } catch {}
-  startLibraryAutoWatch()
-  // 发现页磁盘预热：后台拉推荐/新歌/新碟/榜单，用户打开时优先读盘
+
+  // 1) 先后台装音源（搜索/试听依赖），不挡页面静态资源
+  setImmediate(() => {
+    console.log('[boot] 后台加载已激活音源…')
+    scheduleRestoreActiveSources().then(() => {
+      console.log('[boot] 音源加载完成')
+    })
+  })
+
+  // 2) 稍后再刷新音源元数据（会读全部脚本，较重）
+  setTimeout(() => {
+    try {
+      refreshStoredSourceMeta()
+      console.log('[boot] 音源元数据已刷新')
+    } catch (e) {
+      console.warn('[boot] 音源元数据刷新失败:', e?.message || e)
+    }
+  }, 20000).unref?.()
+
+  // 3) 音乐库监测：再延后，避开用户刚打开时的 IO
+  setTimeout(() => {
+    startLibraryAutoWatch()
+  }, 25000).unref?.()
+
+  // 4) 发现页预热：用户打开后再慢慢打音源
   setTimeout(() => {
     import('./utils/discoverFeedWarm.js')
       .then(({ startDiscoverFeedWarm }) => startDiscoverFeedWarm())
       .catch(() => {})
-  }, 3000).unref?.()
-  // 启动后检查 GitHub 新版本；有更新则自动备份音源/歌单等到下载目录
+  }, 45000).unref?.()
+
+  // 5) 版本检查 / 自动备份
   setTimeout(() => {
     import('./utils/autoUserBackup.js')
       .then(({ runAutoBackupVersionCheck }) => runAutoBackupVersionCheck())
       .catch(() => {})
-  }, 8000).unref?.()
-  // 启动后补跑未分析情绪（仅新/未完成文件）
+  }, 60000).unref?.()
+
+  // 6) 情绪分析补跑（最耗 CPU，最后）
   setTimeout(() => {
     import('./utils/moodAnalyzeJob.js')
-      .then(({ scheduleMoodAutoAnalyze }) => scheduleMoodAutoAnalyze({ delayMs: 1000 }))
+      .then(({ scheduleMoodAutoAnalyze }) => scheduleMoodAutoAnalyze({ delayMs: 5000 }))
       .catch(() => {})
-  }, 12000).unref?.()
+  }, 90000).unref?.()
 })

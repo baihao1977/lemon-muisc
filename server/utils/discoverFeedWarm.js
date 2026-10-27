@@ -18,7 +18,8 @@ import {
 
 const WARM_TIMEOUT_MS = 18000
 const WARM_INTERVAL_MS = 12 * 60 * 1000
-const WARM_INITIAL_DELAY_MS = 8 * 1000
+/** 首次预热再等一会儿，避开用户刚打开应用时的 IO */
+const WARM_INITIAL_DELAY_MS = 30 * 1000
 
 const warmLimiter = createLimiter(2)
 let timer = null

@@ -6,7 +6,13 @@
 端口：`7983`  
 首次登录：`admin123` / `admin123`（登录后立刻改密）
 
-飞牛应用中心装的是原生 FPK，**不要**再把 Docker 套进 FPK。下面面向自建 Linux / NAS Docker / 群晖等。
+飞牛应用中心装的是原生 FPK，**不要**再把 Docker 套进 FPK。下面面向自建 Linux / NAS Docker / 群晖 / **宝塔** 等。
+
+| 场景 | 章节 |
+|------|------|
+| compose / `docker run` | 方式一、二 |
+| 国内 GHCR 加速 | 方式三 |
+| 宝塔面板 | [方式四：宝塔面板 Docker](#方式四宝塔面板-docker) |
 
 ---
 
@@ -174,6 +180,97 @@ DLNA 投屏依赖局域网组播。桥接网往往搜不到设备，可加 `netw
 
 ---
 
+## 方式四：宝塔面板 Docker
+
+适合已安装「Docker 管理器」的宝塔 Linux。官方镜像在 **GitHub Container Registry（ghcr.io）**，不是 Docker Hub，因此：
+
+- **推荐用「命令拉取」**（面板里「拉取镜像 → 命令拉取」），直接执行 `docker pull …`
+- 「从仓库拉取 / 常规拉取」多半按 Docker Hub 仓库名解析，**填 `ghcr.io/...` 经常失败或找不到**；国内也建议用加速域名命令拉取
+
+默认宿主机目录（可按需改成你的盘符路径，容器内右侧路径不要改）：
+
+| 宿主机 | 容器内 | 用途 |
+|--------|--------|------|
+| `/www/wwwroot/lemon-music/config` | `/config` | 配置与数据库（更新镜像勿删） |
+| `/www/wwwroot/lemon-music/music` | `/music` | 音乐库 |
+| `/www/wwwroot/lemon-music/downloads` | `/downloads` | 下载保存（含「柠檬音乐更新」安装包） |
+
+### 1. 准备目录
+
+在宝塔「终端」或 SSH 执行：
+
+```bash
+mkdir -p /www/wwwroot/lemon-music/{config,music,downloads}
+```
+
+### 2. 拉取镜像（命令拉取）
+
+**Docker 管理器 → 镜像 → 拉取镜像 → 命令拉取**，执行下面其一。
+
+官方源：
+
+```bash
+docker pull ghcr.io/jia070310/lemon-muisc:latest
+```
+
+国内拉不动 `ghcr.io` 时（示例加速站，失效可换其它 GHCR 加速）：
+
+```bash
+docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest
+docker tag ghcr.1ms.run/jia070310/lemon-muisc:latest ghcr.io/jia070310/lemon-muisc:latest
+```
+
+指定版本把 `latest` 换成如 `1.2.17.19`。
+
+### 3. 创建容器
+
+**Docker 管理器 → 容器 → 添加容器**，或终端执行：
+
+```bash
+docker run -d --name lemon-music --restart unless-stopped \
+  -p 7983:7983 \
+  -e PORT=7983 \
+  -e DOWNLOAD_PATH=/downloads \
+  -e CONFIG_PATH=/config \
+  -e MUSIC_HOST_PATH=/www/wwwroot/lemon-music/music \
+  -e DOWNLOADS_HOST_PATH=/www/wwwroot/lemon-music/downloads \
+  -v /www/wwwroot/lemon-music/config:/config \
+  -v /www/wwwroot/lemon-music/music:/music \
+  -v /www/wwwroot/lemon-music/downloads:/downloads \
+  ghcr.io/jia070310/lemon-muisc:latest
+```
+
+若上一步只用了加速镜像且未 `docker tag`，把最后一行改成 `ghcr.1ms.run/jia070310/lemon-muisc:latest`。
+
+面板里手动创建时对照：
+
+- 镜像：刚拉下来的 `ghcr.io/jia070310/lemon-muisc:latest`（或加速名）
+- 端口：`7983` → `7983`
+- 环境变量：`PORT=7983`、`DOWNLOAD_PATH=/downloads`、`CONFIG_PATH=/config`
+- 目录挂载：上表三行
+
+### 4. 访问与更新
+
+浏览器：`http://服务器IP:7983`  
+首次登录：`admin123` / `admin123`（立刻改密）
+
+更新镜像（数据在三个挂载目录里，不会丢）：
+
+```bash
+docker pull ghcr.io/jia070310/lemon-muisc:latest
+# 国内可改为：docker pull ghcr.1ms.run/jia070310/lemon-muisc:latest && docker tag …
+docker rm -f lemon-music
+# 再执行上面同一条 docker run
+```
+
+### 5. 可选：宝塔网站反代
+
+若要用域名 / HTTPS：新建网站 → 反向代理到 `http://127.0.0.1:7983`，并开启 WebSocket 支持（路径 `/ws`）。证书用宝塔申请即可，容器保持 HTTP。
+
+防火墙 / 安全组放行 `7983`（仅直连端口时需要）。
+
+---
+
 ## HTTPS（可选）
 
 容器不会自动拿飞牛系统证书。要用 HTTPS：把 `fullchain.pem`、`privkey.pem` 放到 `certs/`，再叠加：
@@ -209,11 +306,11 @@ docker compose exec lemon-music node scripts/reset-password.js 用户名 新密�
 
 `docker run` 部署则把 `docker compose exec lemon-music` 换成 `docker exec lemon-music`。
 
-| 项目 | 飞牛 FPK | Docker |
-|------|----------|--------|
-| 安装 | 应用中心 | 拉镜像 + compose / run |
-| 证书 | 自动读飞牛证书 | 自行挂载，或前面反代 |
-| 配置目录 | `/volX/@appdata/lemon-music/config` | 映射的 `/config` |
+| 项目 | 飞牛 FPK | Docker / 宝塔 |
+|------|----------|----------------|
+| 安装 | 应用中心 | 拉镜像 + compose / run；宝塔用「命令拉取」ghcr |
+| 证书 | 自动读飞牛证书 | 自行挂载，或前面反代（宝塔可网站反代） |
+| 配置目录 | `/volX/@appdata/lemon-music/config` | 映射的 `/config`（宝塔示例见方式四） |
 
 - 应用监听容器内 `7983`（HTTP 或 HTTPS）
 - WebSocket：`/ws`（同一端口）

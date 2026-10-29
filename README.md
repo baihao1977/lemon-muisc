@@ -235,6 +235,8 @@ docker run -d --name lemon-music --restart unless-stopped -p 7983:7983 \
 
 国内拉不动 `ghcr.io` 时，把 `image` 换成 `ghcr.1ms.run/jia070310/lemon-muisc:latest`（步骤见 [docs/docker.md](docs/docker.md)「国内源拉取」）。
 
+**宝塔面板**：镜像在 ghcr.io，请用「命令拉取」；默认目录 `/www/wwwroot/lemon-music/{config,music,downloads}`。步骤见 [docs/docker.md](docs/docker.md)「方式四：宝塔面板 Docker」。
+
 启用 HTTPS（证书放到 `certs/`）：
 
 ```bash

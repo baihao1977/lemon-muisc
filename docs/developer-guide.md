@@ -127,7 +127,7 @@ lemon-muisc/
 
 ### 服务入口（server/index.js）
 
-启动流程：初始化 SQLite → 迁移文件路径 → 刷新音源元数据 → 挂载 `/api` → 托管前端静态产物（SPA fallback）→ 启动 WebSocket → **恢复各用户激活音源**（跳过故障源）→ 初始化下载队列 → 内存守卫 → 遥测。SIGINT/SIGTERM 优雅停机。
+启动流程：初始化 SQLite → 迁移文件路径 → 刷新音源元数据 → 挂载 `/api` → 托管前端静态产物（SPA fallback）→ 启动 WebSocket → **恢复各用户激活音源**（清除旧故障提示后重试加载；失败写运行日志）→ 初始化下载队列 → 内存守卫 → 遥测。SIGINT/SIGTERM 优雅停机。
 
 ### 音源沙箱（sourceManager.js）
 
@@ -136,7 +136,7 @@ lemon-muisc/
 
 支持平台：`kw/kg/tx/wy/mg`（酷我/酷狗/QQ/网易云/咪咕）；动作：`musicUrl/lyric/pic`；音质：`128k/320k/flac/flac24bit/hires/atmos/atmos_plus/master`。
 
-安全：沙箱 console 置空、require 白名单、20s 初始化超时、同 id 先卸后装；故障区分临时网络错误（不封源）与永久故障（停用并广播 `source.fault`）。
+安全：沙箱 console 置空、require 白名单、20s 初始化超时、同 id 先卸后装；故障区分临时/可恢复错误（不封源）与严重脚本错误（可停用该源并写入运行日志）。默认**不向普通用户弹窗**；`GET /source/fault` 供诊断读取。
 
 ## 7. 数据模型（config/lx-music.db）
 
@@ -258,7 +258,7 @@ lemon-muisc/
 | `library:changed` / `library:removed` | 全员 | 音乐库变更（整理/保存标签后触发，驱动前端全量重载） |
 | `library:scan-progress` / `library:scan-complete` | 全员 | 扫描进度/完成 |
 | `library:user-data-changed` | 用户级 | 个人歌单/收藏变更 |
-| `source.fault` | 用户级 | 音源故障推送 |
+| `source.fault` | （已弱化） | 历史事件名；现默认不再向前端推送弹窗，故障见运行日志 / `GET /source/fault` |
 | `dlna:now-playing` | 用户级 | 服务端投屏切歌（队列由服务器推进） |
 | `dlna:queue-ended` | 用户级 | 投屏队列结束或手动停止 |
 

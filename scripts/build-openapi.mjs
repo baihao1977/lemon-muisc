@@ -171,8 +171,15 @@ add('/source/update/{id}', 'post', '更新指定音源脚本', {
 })
 add('/source/{id}/export', 'get', '导出音源脚本（写入下载目录「音源导出」文件夹，并返回脚本内容）', { tag: 'source', admin: true, parameters: [p('id', '音源 ID')] })
 add('/source/{id}', 'delete', '删除音源', { tag: 'source', admin: true, parameters: [p('id', '音源 ID')] })
-add('/source/fault', 'get', '音源故障信息', { tag: 'source' })
-add('/source/fault/dismiss', 'post', '忽略故障提示', { tag: 'source' })
+add('/source/fault', 'get', '最近一次音源故障（诊断用）', {
+  tag: 'source',
+  description:
+    '返回最近写入的音源故障记录（若有）。偶发沙箱/加载失败以服务端运行日志为准，默认不向客户端弹窗推送；本接口供管理员排查或自建监控读取。',
+})
+add('/source/fault/dismiss', 'post', '清除故障记录', {
+  tag: 'source',
+  description: '清除 settings 中保存的最近音源故障记录（不再用于强制前端弹窗）。',
+})
 add('/source/health/report', 'post', '上报音源健康（试听片段检测）', {
   tag: 'source',
   body: {
@@ -188,8 +195,16 @@ add('/source/health/report', 'post', '上报音源健康（试听片段检测）
 })
 add('/source/health/dismiss', 'post', '忽略健康提示', { tag: 'source', body: {} })
 add('/source/health/clear', 'post', '清除健康记录', { tag: 'source', admin: true })
-add('/source/fault/delete', 'post', '删除故障音源', { tag: 'source', admin: true })
-add('/source/fault/reimport', 'post', '重导故障音源', { tag: 'source', admin: true })
+add('/source/fault/delete', 'post', '删除故障记录对应音源', {
+  tag: 'source',
+  admin: true,
+  description: '删除最近故障记录关联的 user_api，并清除故障记录。',
+})
+add('/source/fault/reimport', 'post', '按故障记录重导音源', {
+  tag: 'source',
+  admin: true,
+  description: '删除故障音源后若有 homepage 则尝试重新拉取导入。',
+})
 add('/source/activate/{id}', 'post', '激活音源', { tag: 'source', parameters: [p('id', '音源 ID')] })
 add('/source/deactivate/{id}', 'post', '停用音源', { tag: 'source', parameters: [p('id', '音源 ID')] })
 add('/source/deactivate', 'post', '停用全部', { tag: 'source' })

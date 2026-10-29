@@ -1175,7 +1175,8 @@ paths:
     get:
       tags:
         - source
-      summary: 音源故障信息
+      summary: 最近一次音源故障（诊断用）
+      description: 返回最近写入的音源故障记录（若有）。偶发沙箱/加载失败以服务端运行日志为准，默认不向客户端弹窗推送；本接口供管理员排查或自建监控读取。
       security:
         - bearerAuth: []
       responses:
@@ -1195,7 +1196,8 @@ paths:
     post:
       tags:
         - source
-      summary: 忽略故障提示
+      summary: 清除故障记录
+      description: 清除 settings 中保存的最近音源故障记录（不再用于强制前端弹窗）。
       security:
         - bearerAuth: []
       responses:
@@ -1303,8 +1305,8 @@ paths:
     post:
       tags:
         - source
-      summary: 删除故障音源
-      description: 需要管理员权限 (admin)
+      summary: 删除故障记录对应音源
+      description: "删除最近故障记录关联的 user_api，并清除故障记录。\n\n需要管理员权限 (admin)"
       security:
         - bearerAuth: []
       responses:
@@ -1330,8 +1332,8 @@ paths:
     post:
       tags:
         - source
-      summary: 重导故障音源
-      description: 需要管理员权限 (admin)
+      summary: 按故障记录重导音源
+      description: "删除故障音源后若有 homepage 则尝试重新拉取导入。\n\n需要管理员权限 (admin)"
       security:
         - bearerAuth: []
       responses:

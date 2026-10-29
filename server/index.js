@@ -9,18 +9,22 @@ import { apiRouter } from './routes/index.js'
 import { apiVersionHeader } from './routes/openApi.js'
 import { initDownloadQueue } from './routes/download.js'
 import { setupWebSocket } from './ws.js'
-import { loadSource } from './sourceManager.js'
+import { loadSource, unloadSource } from './sourceManager.js'
 import {
   getUnionActiveSourceIds,
   migrateGlobalActiveSourcesToUsers,
   removeActiveSourceIdFromAllUsers,
 } from './utils/activeSources.js'
 import { refreshStoredSourceMeta } from './routes/source.js'
-import { installSourceFaultHandlers, recordSourceFault, getSourceFault } from './sourceFault.js'
+import {
+  installSourceFaultHandlers,
+  clearSourceFault,
+  shouldRecordSourceFault,
+} from './sourceFault.js'
+import { installServerRuntimeLog, logRuntime } from './utils/runtimeLog.js'
 import { startMemoryGuard } from './utils/memoryGuard.js'
 import { startLibraryAutoWatch, stopLibraryAutoWatch } from './utils/libraryAutoWatch.js'
 import { ensureDefaultAdmin } from './utils/auth.js'
-import { installServerRuntimeLog } from './utils/runtimeLog.js'
 import { createAppListenServer } from './utils/dualListen.js'
 import {
   listFeiniuCertificates,
@@ -112,15 +116,9 @@ setupWebSocket(wss)
 async function restoreActiveSources() {
   try {
     migrateGlobalActiveSourcesToUsers()
-    const fault = getSourceFault()
-    let ids = getUnionActiveSourceIds().filter(Boolean)
-    if (fault?.id) {
-      if (ids.includes(fault.id)) {
-        console.warn(`跳过自动激活故障音源: ${fault.name} (${fault.id})`)
-      }
-      ids = ids.filter((id) => id !== fault.id)
-      removeActiveSourceIdFromAllUsers(fault.id)
-    }
+    // 启动时清掉旧的用户向故障提示记录，并重新尝试加载；偶发失败只写日志，不让用户每次打开网页再被吓一跳
+    try { clearSourceFault() } catch {}
+    const ids = getUnionActiveSourceIds().filter(Boolean)
 
     for (const id of ids) {
       try {
@@ -132,7 +130,18 @@ async function restoreActiveSources() {
         const sources = await loadSource(api.id, api.script)
         console.log(`已自动加载音源: ${api.id}`, Object.keys(sources))
       } catch (e) {
-        recordSourceFault(id, e)
+        // 启动加载失败：本轮跳过，保留「已激活」配置以便下次启动自动重试；只写运行日志，不弹窗、不永久踢出
+        try { unloadSource(id) } catch {}
+        const msg = e?.message || String(e)
+        console.warn(`[音源] 启动加载失败（已跳过，下次启动重试）: ${id} — ${msg}`)
+        try {
+          logRuntime(
+            shouldRecordSourceFault(e) ? 'error' : 'warn',
+            'source-boot',
+            `启动加载失败（下次重试）: ${id} — ${msg}`,
+            { sourceId: id },
+          )
+        } catch {}
       }
     }
   } catch (e) {

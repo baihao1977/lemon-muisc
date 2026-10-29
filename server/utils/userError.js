@@ -46,7 +46,7 @@ const RULES = [
   },
   {
     test: /音源脚本执行失败/i,
-    message: '音源脚本运行出错，请检查音源或重新导入',
+    message: '音源脚本运行出错（多为偶发异常）。可重新激活后再试；反复失败再考虑重新导入',
   },
   {
     test: /getToneId is not defined/i,

@@ -238,11 +238,14 @@
     <FullscreenPlayer />
     <TagEditModal />
 
-    <div v-if="showFaultModal" class="modal-overlay source-fault-overlay">
+    <div v-if="showFaultModal" class="modal-overlay source-fault-overlay" @click.self="handleFaultDismiss">
       <div class="source-fault-modal">
         <h3>音源异常</h3>
         <template v-if="sourceFault">
-          <p class="fault-desc">当前音源「{{ sourceFault.name }}」运行出错，已自动停用以避免影响应用。若为临时网络问题，可保留音源稍后重试；若音源脚本损坏，请删除或重新导入。</p>
+          <p class="fault-desc">
+            当前音源「{{ sourceFault.name }}」曾在加载或运行时出错，已暂时停用（多数是超时、网络或脚本偶发异常，不一定是音源坏了）。
+            可先点「知道了」后在设置里重新激活再试；若反复失败再考虑删除或重新导入。
+          </p>
           <div class="fault-error">{{ formatPromptReason(sourceFault.message) }}</div>
         </template>
         <p v-if="faultResult" class="fault-result" :class="{ ok: faultResult.ok }">{{ faultResult.text }}</p>
@@ -824,7 +827,6 @@ const sourceFault = ref(null)
 const faultBusy = ref(false)
 const faultResult = ref(null)
 const showFaultModal = computed(() => Boolean(sourceFault.value || faultResult.value))
-let offSourceFaultWS = null
 
 const downgradePrompt = ref(null)
 /** @type {import('vue').Ref<false | 'retry' | 'downgrade' | 'reject'>} */
@@ -1233,13 +1235,6 @@ function closeFaultModal() {
   faultResult.value = null
 }
 
-async function loadSourceFault() {
-  try {
-    const fault = await api.source.getFault()
-    sourceFault.value = fault?.id ? fault : null
-  } catch {}
-}
-
 async function handleFaultDismiss() {
   faultBusy.value = true
   try {
@@ -1341,15 +1336,11 @@ onMounted(() => {
   offLibraryHotReload = initLibraryHotReload(api, { onWS })
   initDownloadBadge()
   checkForUpdate()
-  loadSourceFault()
+  // 音源沙箱偶发故障只写服务端运行日志，不再对普通用户弹窗（用户也无法处理）
   loadPendingDowngradePrompts()
   loadPendingDownloadSourcePrompts()
   loadPendingExistFilePrompts()
   document.addEventListener('pointerdown', onMobileMorePointerDown, true)
-  offSourceFaultWS = onWS('source.fault', (fault) => {
-    sourceFault.value = fault?.id ? fault : null
-    faultResult.value = null
-  })
   offDowngradeWS = onWS('download:status', (d) => {
     if (d?.status === 'await_confirm' && d.downgradeOffer?.toQuality) {
       enqueueDowngradePrompt(d)
@@ -1431,7 +1422,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('pointerdown', onMobileMorePointerDown, true)
-  offSourceFaultWS?.()
   offDowngradeWS?.()
   offDownloadSourceWS?.()
   offDownloadPlatformWS?.()
